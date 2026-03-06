@@ -4,7 +4,9 @@ WORKDIR /app
 
 # Install system dependencies if analyzer.py uses OpenCV/Pillow
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1-mesa-glx \
+    libgl1 \
+    libglib2.0-0 \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
