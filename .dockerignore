@@ -1,0 +1,37 @@
+# Python bytecode
+**/__pycache__/
+**/*.py[cod]
+**/*.$py.class
+
+# Environments
+.env
+.env.docker
+env*/
+venv/
+.env*/
+bin/
+lib/
+share/
+
+# Local Data (Should be handled by Volumes, not built into the Image)
+data/
+photos_to_post/
+posted_photos/
+*.sqlite
+*.db
+
+# Logs
+*.log
+src/logs/
+
+# IDEs and OS junk
+.vscode/
+.idea/
+.git/
+.gitignore
+.DS_Store
+
+# Docker files
+Dockerfile
+docker-compose.yml
+.dockerignore

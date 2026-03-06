@@ -1,0 +1,9 @@
+services:
+  bot-service:
+    build: .
+    restart: always
+    env_file: .env.docker
+    volumes:
+      # Map the host data folder to the container
+      - ./data:/app/data
+      - ./src/logs:/app/src/logs
