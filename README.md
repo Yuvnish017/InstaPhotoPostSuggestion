@@ -173,12 +173,11 @@ docker ps
 We are actively working on moving from MVP to V2.0. Here is the current development plan:
 
 ### 🚧 In Progress
-* **[Perf] Parallel Processing:** Utilizing multi-core processing for faster image scoring.
-
-### 📋 Planned Features
 * **[UX] Interactive Bot:** Add "Reject" button to Telegram messages.
 * **[Algorithm] Composition Check:** "Rule of Thirds" detection to reward well-composed shots.
 * **[Algorithm] Crowd Control:** Penalize scores for images with too many faces (crowds).
+
+### 📋 Planned Features
 * **[AI] Smart Captions:** Integration with local or cloud LLMs to generate Instagram captions for approved photos.
 * **[Post-Pro] Template Engine:** Auto-format approved images into 4:5 or 1:1 aspect ratios with borders.
 

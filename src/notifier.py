@@ -1,12 +1,16 @@
 # notifier.py
+import concurrent.futures
 import os
 import io
-from config import PHOTOS_FOLDER, MAX_CANDIDATES, CHAT_ID
+import time
+
+from config import PHOTOS_FOLDER, MAX_CANDIDATES, CHAT_ID, MAX_PROCESSES, PROCESS_TIMEOUT
 from analyzer import compute_score, gen_caption_suggestion
 from db import init_db, mark_suggested, unprocessed_candidates
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from PIL import Image
 from logger import Logger
+
 
 # initialize DB (idempotent)
 init_db()
@@ -17,6 +21,21 @@ LOGGER = Logger(log_file_name="notifier.log")
 def _read_image_bytes(path):
     with open(path, "rb") as f:
         return f.read()
+
+
+def _evaluate(filename):
+    full = os.path.join(PHOTOS_FOLDER, filename)
+    LOGGER.info(f"Evaluating {filename}")
+    try:
+        b = _read_image_bytes(full)
+        mtime = os.path.getmtime(full)
+        analysis = compute_score(b, mtime)
+        caption = gen_caption_suggestion(filename, analysis)
+        return analysis["score"], filename, b, caption, analysis
+    except Exception as e:
+        # skip problematic files
+        LOGGER.warning(f"Skipping {filename} due to error: {e}")
+        return float("-inf"), filename, None, "", {}
 
 
 async def choose_and_send(bot: Bot):
@@ -30,25 +49,47 @@ async def choose_and_send(bot: Bot):
         # nothing to suggest
         return None, ""
 
-    evaluated = []
-    for fname in candidates:
-        full = os.path.join(PHOTOS_FOLDER, fname)
-        LOGGER.info(f"Evaluating {fname}")
-        try:
-            b = _read_image_bytes(full)
-            mtime = os.path.getmtime(full)
-            analysis = compute_score(b, mtime)
-            caption = gen_caption_suggestion(fname, analysis)
-            evaluated.append((analysis["score"], fname, b, caption, analysis))
-        except Exception as e:
-            # skip problematic files
-            LOGGER.warning(f"Skipping {fname} due to error: {e}")
-            continue
+    evaluated = {}
+    start = time.time()
+    with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_PROCESSES) as executor:
+        future_to_path = {
+            executor.submit(_evaluate, fname): fname
+            for fname in candidates
+        }
+
+        for future in concurrent.futures.as_completed(future_to_path):
+            path = future_to_path[future]
+            try:
+                # We apply the timeout to each individual task's result
+                analysis = future.result(timeout=PROCESS_TIMEOUT)
+                evaluated[path] = analysis
+            except concurrent.futures.TimeoutError:
+                print(f"⌛ Skipping {path}: Analysis took too long.")
+                evaluated[path] = (float("-inf"), path, None, "", {})
+            except Exception as e:
+                print(f"❌ Error analyzing {path}: {e}")
+                evaluated[path] = (float("-inf"), path, None, "", {})
+
+    LOGGER.info(f"Time taken to evaluate: {time.time() - start}")
+
+    # for fname in candidates:
+    #     full = os.path.join(PHOTOS_FOLDER, fname)
+    #     LOGGER.info(f"Evaluating {fname}")
+    #     try:
+    #         b = _read_image_bytes(full)
+    #         mtime = os.path.getmtime(full)
+    #         analysis = compute_score(b, mtime)
+    #         caption = gen_caption_suggestion(fname, analysis)
+    #         evaluated.append((analysis["score"], fname, b, caption, analysis))
+    #     except Exception as e:
+    #         # skip problematic files
+    #         LOGGER.warning(f"Skipping {fname} due to error: {e}")
+    #         continue
 
     if not evaluated:
         return None, ""
 
-    evaluated.sort(key=lambda x: x[0], reverse=True)
+    evaluated = sorted(list(evaluated.values()), key=lambda x: x[0], reverse=True)
     top_score, top_fname, top_bytes, top_caption, top_analysis = evaluated[0]
 
     # mark suggested in DB

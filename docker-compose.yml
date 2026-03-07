@@ -1,6 +1,8 @@
 services:
   bot-service:
     build: .
+    shm_size: '256mb' # Give more room for image processing
+    init: true        # Handles process cleanup
     restart: always
     env_file: .env.docker
     volumes:
