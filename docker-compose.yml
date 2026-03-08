@@ -5,7 +5,11 @@ services:
     init: true        # Handles process cleanup
     restart: always
     env_file: .env.docker
+    environment:
+      - TZ=Aisa/Tokyo
     volumes:
       # Map the host data folder to the container
       - ./data:/app/data
       - ./src/logs:/app/src/logs
+      - /etc/localtime:/etc/localtime:ro  # <--- Syncs the clock with the host (Read-Only)
+      - /etc/timezone:/etc/timezone:ro    # <--- Syncs the zone file (Read-Only)

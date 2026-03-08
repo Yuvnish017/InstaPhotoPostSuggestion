@@ -7,14 +7,18 @@ from telegram import Update, BotCommand
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 from config import BOT_TOKEN, PHOTOS_FOLDER, POSTED_FOLDER
 from notifier import choose_and_send
-from db import mark_approved, mark_skipped, init_db
+from db import mark_approved, mark_skipped, init_db, get_analysis_stats, get_latest_health_report
 from utils import next_scheduled_time_epoch
 from logger import Logger
+from resource_monitor import ResourceMonitor
 
 # ensure folders and DB exist
 os.makedirs(PHOTOS_FOLDER, exist_ok=True)
 os.makedirs(POSTED_FOLDER, exist_ok=True)
 init_db()
+
+monitor = ResourceMonitor()
+monitor.start()
 
 NEXT_SCHEDULE = next_scheduled_time_epoch()
 LOGGER = Logger(log_file_name="main.log")
@@ -37,8 +41,57 @@ async def next_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def status_command(update, context):
+    row = get_latest_health_report()
+
+    if not row:
+        await update.message.reply_text("❌ No telemetry data found yet.")
+        return
+
+    # row structure based on our schema: (id, timestamp, cpu, mem, temp, is_busy)
+    _, timestamp, cpu, mem, temp, is_busy = row
+
+    status_emoji = "🔥" if temp > 75 else "🟢"
+    busy_status = "🏃 Analyzing Photos" if is_busy else "😴 Idling"
+
+    message = (
+        f"🖥️ **Pi 4 Health Report**\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"🕒 Time: `{timestamp}`\n"
+        f"📊 Status: {busy_status}\n"
+        f"{status_emoji} Temp: `{temp:.1f}°C`\n"
+        f"🧠 App RAM: `{mem:.1f} MB`\n"
+        f"⚡ CPU Load: `{cpu:.1f}%`"
+    )
+
+    await update.message.reply_text(message, parse_mode='Markdown')
+
+
+async def last_run_utilization_command(update, context):
+    row = get_analysis_stats()
+
+    if not row:
+        await update.message.reply_text("❌ No telemetry data found yet.")
+        return
+
+    cpu, temp, mem = row
+
+    status_emoji = "🔥" if temp > 75 else "🟢"
+
+    message = (
+        f"🖥️ **Pi 4 Health Report During Last Image Analysis**\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"{status_emoji} Temp: `{temp:.1f}°C`\n"
+        f"🧠 App RAM: `{mem:.1f} MB`\n"
+        f"⚡ CPU Load: `{cpu:.1f}%`"
+    )
+
+    await update.message.reply_text(message, parse_mode='Markdown')
+
+
 async def _process_suggestion(bot, chat_id):
     try:
+        monitor.set_high_priority(True)  # Start high-res logging
         sent = await choose_and_send(bot)
 
         if sent:
@@ -48,6 +101,8 @@ async def _process_suggestion(bot, chat_id):
     except Exception as err:
         LOGGER.error(f"Error in background suggestion: {err}")
         await bot.send_message(chat_id=chat_id, text="❌ An error occurred while processing suggestion.")
+    finally:
+        monitor.set_high_priority(False)  # Go back to sleep
 
 
 async def suggest_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -117,6 +172,7 @@ async def daily_scheduler_task(app):
         LOGGER.info(f"Scheduler sleeping for {int(wait_seconds)} seconds until next run at {datetime.fromtimestamp(NEXT_SCHEDULE).strftime('%Y/%m/%d:%H:%M')}")
         await asyncio.sleep(wait_seconds)
         try:
+            monitor.set_high_priority(True)  # Go back to sleep
             sent = await choose_and_send(bot)
             if sent:
                 LOGGER.info(f"Daily suggestion sent: {sent}")
@@ -125,28 +181,10 @@ async def daily_scheduler_task(app):
         except Exception as e:
             LOGGER.error(f"Error in daily scheduled send: {e}")
             LOGGER.error(traceback.format_exc())
+        finally:
+            monitor.set_high_priority(False)  # Go back to sleep
         await asyncio.sleep(5)  # prevent double send
         NEXT_SCHEDULE = next_scheduled_time_epoch()
-
-
-async def daily_job(context: ContextTypes.DEFAULT_TYPE):
-    """Runs once per day at configured hour/minute."""
-    bot = context.bot
-    sent = await choose_and_send(bot)
-    if sent:
-        LOGGER.info(f"Daily suggestion sent: {sent}")
-    else:
-        LOGGER.warning("Daily suggestion: no candidates available.")
-
-
-async def init_jobqueue(app):
-    if app.job_queue is None:
-        from telegram.ext import JobQueue
-        jq = JobQueue()
-        jq.set_application(app)
-        jq.start()
-        app.job_queue = jq
-        LOGGER.info("JobQueue initialized manually.")
 
 
 async def main():
@@ -162,7 +200,10 @@ async def main():
                 BotCommand("start", "Start the bot"),
                 BotCommand("suggest_now", "Get an immediate suggestion"),
                 BotCommand("whoami", "Show your chat id"),
-                BotCommand("next_schedule", "Show when is the next weekly run scheduled")
+                BotCommand("next_schedule", "Show when is the next weekly run scheduled"),
+                BotCommand("status", "Gives latest health report based on CPU and Mem utilization"),
+                BotCommand("last_run", "Gives CPU and Mem utilization analysis for "
+                                       "last heavy image analysis run")
             ])
 
         except Exception:
@@ -174,6 +215,8 @@ async def main():
         app.add_handler(CommandHandler("whoami", whoami_command))
         app.add_handler(CommandHandler("next_schedule", next_schedule))
         app.add_handler(CommandHandler("suggest_now", suggest_now))
+        app.add_handler(CommandHandler("status", status_command))
+        app.add_handler(CommandHandler("last_run", last_run_utilization_command))
         app.add_handler(CallbackQueryHandler(callback_handler))
         # fallback message handler to confirm bot connectivity
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,
@@ -181,12 +224,6 @@ async def main():
 
         # run scheduler in background
         asyncio.create_task(daily_scheduler_task(app))
-        # app.job_queue.run_daily(
-        #     daily_job,
-        #     time=dtime(hour=SCHEDULE_HOUR, minute=SCHEDULE_MINUTE, tzinfo=timezone(timedelta(hours=9))),
-        #     name="daily_suggestion",
-        #     chat_id=CHAT_ID
-        # )
 
         # run bot polling (blocking)
         LOGGER.info("Starting Telegram bot...")

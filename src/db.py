@@ -22,6 +22,16 @@ def init_db():
         score REAL
     )
     """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS telemetry (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp DATETIME DEFAULT (DATETIME('now', 'localtime')),
+            cpu_percent REAL,
+            memory_mb REAL,
+            temp_c REAL,
+            is_busy BOOLEAN
+        )
+    """)
     LOGGER.info("DB Table initialized")
     conn.commit()
     conn.close()
@@ -106,3 +116,63 @@ def unprocessed_candidates(folder, max_candidates=50):
             break
     LOGGER.info(f"Number of candidates found: {len(files)}")
     return files
+
+
+def save_telemetry(stats):
+    """
+    Saves a snapshot of system resources.
+    stats: dict containing 'cpu', 'mem', 'temp', and 'is_busy'
+    """
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=10)  # 10s timeout for Pi SD card latency
+        cursor = conn.cursor()
+
+        LOGGER.info("Executing: INSERT INTO telemetry (cpu_percent, memory_mb, temp_c, is_busy)")
+        cursor.execute("""
+            INSERT INTO telemetry (cpu_percent, memory_mb, temp_c, is_busy)
+            VALUES (?, ?, ?, ?)
+        """, (
+            stats.get('cpu'),
+            stats.get('mem'),
+            stats.get('temp'),
+            stats.get('is_busy', False)
+        ))
+
+        conn.commit()
+    except sqlite3.Error as e:
+        LOGGER.error(f"⚠️ Telemetry DB Error: {e}")
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_latest_health_report():
+    """
+    Optional helper to let the user check Pi health via a Telegram command.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    LOGGER.info("Executing: SELECT * FROM telemetry ORDER BY timestamp DESC LIMIT 1")
+    cursor.execute("SELECT * FROM telemetry ORDER BY timestamp DESC LIMIT 1")
+    row = cursor.fetchone()
+    conn.close()
+    return row  # Returns the most recent resource snapshot
+
+
+def get_analysis_stats():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    # Get stats only from the last time is_busy was True
+    LOGGER.info("Executing: SELECT AVG(cpu_percent), MAX(temp_c), MAX(memory_mb) FROM telemetry "
+                "WHERE timestamp > (SELECT MAX(timestamp) FROM telemetry WHERE is_busy = 0 "
+                "AND id < (SELECT MAX(id) FROM telemetry WHERE is_busy = 1)) AND is_busy = 1")
+    cursor.execute("""
+        SELECT AVG(cpu_percent), MAX(temp_c), MAX(memory_mb) 
+        FROM telemetry 
+        WHERE timestamp > (SELECT MAX(timestamp) FROM telemetry WHERE is_busy = 0 AND id < (SELECT MAX(id) FROM telemetry WHERE is_busy = 1))
+        AND is_busy = 1
+    """)
+    stats = cursor.fetchone()
+    conn.close()
+    return stats
