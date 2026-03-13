@@ -1,11 +1,12 @@
 import datetime
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from datetime import time as dtime
 from config import SCHEDULE_MINUTE, SCHEDULE_HOUR
 
 
 def next_scheduled_time_epoch():
     now = datetime.now()
+    print(datetime.now(UTC).astimezone().tzinfo)
     curr_weekday = now.date().weekday()
     days_to_target = (6 - curr_weekday) % 7
     target_time = dtime(SCHEDULE_HOUR, SCHEDULE_MINUTE)
