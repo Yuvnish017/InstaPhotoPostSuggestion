@@ -7,7 +7,7 @@ from telegram import Update, BotCommand
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 from config import BOT_TOKEN, PHOTOS_FOLDER, POSTED_FOLDER
 from notifier import choose_and_send
-from db import mark_approved, mark_skipped, init_db, get_analysis_stats, get_latest_health_report
+from db import mark_approved, mark_skipped, init_db, get_analysis_stats, get_latest_health_report, mark_rejected
 from utils import next_scheduled_time_epoch
 from logger import Logger
 from resource_monitor import ResourceMonitor
@@ -156,6 +156,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action == "skip":
         mark_skipped(fname)
         await query.edit_message_caption(f"⏭ Skipped: {fname}")
+    elif action == "reject":
+        mark_rejected(fname)
+        await  query.edit_message_caption(f"❌ Rejected: {fname}")
     else:
         await query.edit_message_text("Unknown action.")
 

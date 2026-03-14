@@ -18,6 +18,7 @@ def init_db():
         suggested_at TEXT,
         approved INTEGER DEFAULT 0,
         skipped INTEGER DEFAULT 0,
+        rejected INTEGER DEFAULT 0,
         caption TEXT,
         score REAL
     )
@@ -41,11 +42,12 @@ def mark_suggested(filename, score, caption):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("""
-    INSERT OR REPLACE INTO photos (filename, suggested_at, approved, skipped, caption, score)
+    INSERT OR REPLACE INTO photos (filename, suggested_at, approved, skipped, rejected, caption, score)
     VALUES (?, ?, COALESCE((SELECT approved FROM photos WHERE filename=?), 0),
             COALESCE((SELECT skipped FROM photos WHERE filename=?), 0),
+            COALESCE((SELECT rejected FROM photos WHERE filename=?), 0),
             ?, ?)
-    """, (filename, datetime.utcnow().isoformat(), filename, filename, caption, score))
+    """, (filename, datetime.utcnow().isoformat(), filename, filename, filename, caption, score))
     LOGGER.info(f"{filename}, {score} marked as suggested")
     conn.commit()
     conn.close()
@@ -65,6 +67,15 @@ def mark_skipped(filename):
     cur = conn.cursor()
     cur.execute("UPDATE photos SET skipped=1 WHERE filename=?", (filename,))
     LOGGER.info(f"{filename} marked as skipped")
+    conn.commit()
+    conn.close()
+
+
+def mark_rejected(filename):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("UPDATE photos SET rejected=1 WHERE filename=?", (filename,))
+    LOGGER.info(f"{filename} marked as rejected")
     conn.commit()
     conn.close()
 
@@ -89,6 +100,16 @@ def is_skipped(filename):
     return bool(row and row[0] == 1)
 
 
+def is_rejected(filename):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    LOGGER.info(f"{filename}: Checking if previously skipped")
+    cur.execute("SELECT rejected FROM photos WHERE filename=?", (filename,))
+    row = cur.fetchone()
+    conn.close()
+    return bool(row and row[0] == 1)
+
+
 def unprocessed_candidates(folder, max_candidates=50):
     # return list of filenames not approved and not skipped
     files = []
@@ -98,15 +119,15 @@ def unprocessed_candidates(folder, max_candidates=50):
     cur.execute("SELECT filename FROM photos WHERE approved=1")
     rows = cur.fetchall()
     approved = {r[0] for r in rows}
-    cur.execute("SELECT filename FROM photos WHERE skipped=1")
+    cur.execute("SELECT filename FROM photos WHERE rejected=1")
     rows2 = cur.fetchall()
-    skipped = {r[0] for r in rows2}
+    rejected = {r[0] for r in rows2}
     conn.close()
 
     for f in sorted(os.listdir(folder)):
         if not f.lower().endswith((".jpg", ".jpeg", ".png")):
             continue
-        if f in approved or f in skipped:
+        if f in approved or f in rejected:
             continue
         if f in seen:
             continue

@@ -6,7 +6,7 @@ import time
 
 from config import PHOTOS_FOLDER, MAX_CANDIDATES, CHAT_ID, MAX_PROCESSES, PROCESS_TIMEOUT
 from analyzer import compute_score, gen_caption_suggestion
-from db import init_db, mark_suggested, unprocessed_candidates
+from db import init_db, mark_suggested, unprocessed_candidates, is_skipped
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from PIL import Image
 from logger import Logger
@@ -30,6 +30,9 @@ def _evaluate(filename):
         b = _read_image_bytes(full)
         mtime = os.path.getmtime(full)
         analysis = compute_score(b, mtime)
+        was_skipped = is_skipped(filename=filename)
+        if was_skipped:
+            analysis["score"] = analysis["score"] - 0.05
         caption = gen_caption_suggestion(filename, analysis)
         return analysis["score"], filename, b, caption, analysis
     except Exception as e:
@@ -72,20 +75,6 @@ async def choose_and_send(bot: Bot):
 
     LOGGER.info(f"Time taken to evaluate: {time.time() - start}")
 
-    # for fname in candidates:
-    #     full = os.path.join(PHOTOS_FOLDER, fname)
-    #     LOGGER.info(f"Evaluating {fname}")
-    #     try:
-    #         b = _read_image_bytes(full)
-    #         mtime = os.path.getmtime(full)
-    #         analysis = compute_score(b, mtime)
-    #         caption = gen_caption_suggestion(fname, analysis)
-    #         evaluated.append((analysis["score"], fname, b, caption, analysis))
-    #     except Exception as e:
-    #         # skip problematic files
-    #         LOGGER.warning(f"Skipping {fname} due to error: {e}")
-    #         continue
-
     if not evaluated:
         return None, ""
 
@@ -100,7 +89,8 @@ async def choose_and_send(bot: Bot):
     keyboard = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("✅ Approve", callback_data=f"approve:{top_fname}"),
-            InlineKeyboardButton("⏭ Skip", callback_data=f"skip:{top_fname}")
+            InlineKeyboardButton("⏭ Skip", callback_data=f"skip:{top_fname}"),
+            InlineKeyboardButton("❌ Reject", callback_data=f"reject:{top_fname}")
         ]
     ])
 

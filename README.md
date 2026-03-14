@@ -173,7 +173,6 @@ docker ps
 We are actively working on moving from MVP to V2.0. Here is the current development plan:
 
 ### 🚧 In Progress
-* **[UX] Interactive Bot:** Add "Reject" button to Telegram messages.
 * **[Algorithm] Composition Check:** "Rule of Thirds" detection to reward well-composed shots.
 * **[Algorithm] Crowd Control:** Penalize scores for images with too many faces (crowds).
 
