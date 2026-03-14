@@ -25,6 +25,7 @@ MANIFEST
 
 # Environments
 .env
+.env.docker
 *.env
 .envrc
 .venv
@@ -35,7 +36,7 @@ env.bak/
 venv.bak/
 
 # Databases and photos folders
-insta_queue.db
-photos_to_post
-posted_images
+data/insta_queue.db
+data/photos_to_post
+data/posted_images
 

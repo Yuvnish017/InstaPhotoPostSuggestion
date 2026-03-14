@@ -41,7 +41,7 @@ The system operates as a localized automation pipeline on a Raspberry Pi.
 * **Database:** SQLite
 * **APIs:**
   * [python-telegram-bot](https://python-telegram-bot.org/)
-* **DevOps:** Docker (Coming Soon)
+* **DevOps:** Docker
 
 ---
 
@@ -50,7 +50,6 @@ The system operates as a localized automation pipeline on a Raspberry Pi.
 ### Prerequisites
 * Raspberry Pi with Python 3 installed.
 * A Telegram Bot Token (from @BotFather).
-* OpenWeatherMap API Key.
 
 ### Installation
 
@@ -66,7 +65,7 @@ The system operates as a localized automation pipeline on a Raspberry Pi.
    ```
    
 3. **Configuration**<br>
-   Rename .env.example to .env and populate your keys<br>
+   Rename .env.example to .env / .env.docker (if using docker compose for deployment) and populate your keys<br>
 
 ### 🚀 Deployment & Execution
 
@@ -85,7 +84,7 @@ PROJECT_DIR=/home/pi/InstaPhotoPostSuggestion
 # Path to your virtual environment activation script
 VENV_ACTIVATE=$PROJECT_DIR/env/bin/activate
 # Path to your main Python program
-PYTHON_PROGRAM=$PROJECT_DIR/main.py
+PYTHON_PROGRAM=$PROJECT_DIR/src/main.py
 
 # Change directory to the project folder
 cd $PROJECT_DIR
@@ -134,6 +133,38 @@ sudo systemctl status instabot.service
 # To view live logs:
 journalctl -u instabot.service -f
 ```
+
+#### 3. Containerized Execution
+For easier deployment across platforms
+1. Install docker (In case of running on Raspberry Pi):
+```bash
+sudo apt update
+sudo apt upgrade -y
+
+# install docker
+curl -sSL https://get.docker.com | sh
+
+# for running docker commands without root privileges
+sudo usermod -aG docker $USER
+
+# install docker-compose
+sudo apt install -y docker-compose
+```
+
+2. Env keys configuration
+- Rename .env.example to .env.docker
+- Populate your keys
+- Add ```RUNNING_IN_DOCKER=true``` to end of .env.docker
+
+3. Build and spin container
+```bash
+# build and spin container using docker-compose
+docker-compose up --build -d
+
+# verify built image and container creation
+docker images
+docker ps
+```
    
 ---
 
@@ -142,13 +173,10 @@ journalctl -u instabot.service -f
 We are actively working on moving from MVP to V2.0. Here is the current development plan:
 
 ### 🚧 In Progress
-* **[Infra] Docker Support:** Containerizing the application for easier deployment.
-* **[Perf] Parallel Processing:** Utilizing multi-core processing for faster image scoring.
-
-### 📋 Planned Features
-* **[UX] Interactive Bot:** Add "Reject" button to Telegram messages.
 * **[Algorithm] Composition Check:** "Rule of Thirds" detection to reward well-composed shots.
 * **[Algorithm] Crowd Control:** Penalize scores for images with too many faces (crowds).
+
+### 📋 Planned Features
 * **[AI] Smart Captions:** Integration with local or cloud LLMs to generate Instagram captions for approved photos.
 * **[Post-Pro] Template Engine:** Auto-format approved images into 4:5 or 1:1 aspect ratios with borders.
 

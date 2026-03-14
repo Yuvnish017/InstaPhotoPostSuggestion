@@ -2,11 +2,12 @@ import logging
 from logging.handlers import RotatingFileHandler
 import os
 from datetime import datetime
+from config import LOGS_PATH
 
 
 class Logger:
     def __init__(self, log_file_name):
-        self.file_path = os.path.join("./logs", log_file_name)
+        self.file_path = os.path.join(LOGS_PATH, log_file_name)
         os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
 
         logging_format = "%(asctime)s [%(levelname)s]: %(message)s"

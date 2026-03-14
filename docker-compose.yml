@@ -1,0 +1,20 @@
+# Define a YAML anchor for the timezone
+x-timezone: &tz_env
+  TZ: Asia/Tokyo
+
+services:
+  bot-service:
+    build: .
+    shm_size: '256mb' # Give more room for image processing
+    init: true        # Handles process cleanup
+    restart: always
+    env_file: .env.docker
+    environment:
+      # Reference the anchor here
+      <<: *tz_env
+    volumes:
+      # Map the host data folder to the container
+      - ./data:/app/data
+      - ./src/logs:/app/src/logs
+#      - /etc/localtime:/etc/localtime:ro  # <--- Syncs the clock with the host (Read-Only)
+#      - /etc/timezone:/etc/timezone:ro    # <--- Syncs the zone file (Read-Only)
