@@ -5,7 +5,7 @@ import traceback
 from datetime import datetime
 from telegram import Update, BotCommand
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
-from config import BOT_TOKEN, PHOTOS_FOLDER, POSTED_FOLDER
+from config import BOT_TOKEN, PHOTOS_FOLDER, POSTED_FOLDER, SKIP_RETRY
 from notifier import choose_and_send
 from db import mark_approved, mark_skipped, init_db, get_analysis_stats, get_latest_health_report, mark_rejected
 from utils import next_scheduled_time_epoch
@@ -121,6 +121,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     CallbackQuery data format: 'approve:filename' or 'skip:filename'
     """
+    global num_skips
     query = update.callback_query
     await query.answer()
     data = query.data or ""
@@ -156,9 +157,29 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action == "skip":
         mark_skipped(fname)
         await query.edit_message_caption(f"⏭ Skipped: {fname}")
+        num_skips = context.user_data.get("skip_count", 0)
+        num_skips += 1
+        context.user_data["skip_count"] = num_skips
+        LOGGER.info(f"Skip count: {num_skips}/{SKIP_RETRY}")
+        if num_skips >= SKIP_RETRY:
+            LOGGER.info(f"Already skipped {num_skips} times, will not process more suggestions for current request..")
+            # Use query.message or effective_chat to send the new message
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"Already skipped {num_skips} times. Stopping suggestions for now."
+            )
+            context.user_data["skip_count"] = 0
+        else:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"🔎 Suggestion {num_skips}/{SKIP_RETRY} skipped. Getting next..."
+            )
+
+            # "Fire and forget" - this releases the chat lock immediately
+            asyncio.create_task(_process_suggestion(context.bot, update.effective_chat.id))
     elif action == "reject":
         mark_rejected(fname)
-        await  query.edit_message_caption(f"❌ Rejected: {fname}")
+        await query.edit_message_caption(f"❌ Rejected: {fname}")
     else:
         await query.edit_message_text("Unknown action.")
 
