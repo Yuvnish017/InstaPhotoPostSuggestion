@@ -21,6 +21,7 @@ SCHEDULE_MINUTE = int(os.getenv("SCHEDULE_MINUTE", "0"))
 MAX_CANDIDATES = int(os.getenv("MAX_CANDIDATES", "50"))
 MAX_PROCESSES = int(os.getenv("MAX_PROCESSES", "10"))
 PROCESS_TIMEOUT = int(os.getenv("PROCESS_TIMEOUT", "300"))
+SKIP_RETRY = int(os.getenv("SKIP_RETRY", "3"))
 
 if IS_DOCKER:
     PHOTOS_FOLDER = os.getenv("PHOTOS_FOLDER", "/app/data/photos_to_post")
