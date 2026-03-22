@@ -7,6 +7,7 @@ import time
 from config import PHOTOS_FOLDER, MAX_CANDIDATES, CHAT_ID, MAX_PROCESSES, PROCESS_TIMEOUT
 from analyzer import compute_score, gen_caption_suggestion
 from db import init_db, mark_suggested, unprocessed_candidates, is_skipped
+from utils import read_image_bytes
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from PIL import Image
 from logger import Logger
@@ -18,18 +19,13 @@ init_db()
 LOGGER = Logger(log_file_name="notifier.log")
 
 
-def _read_image_bytes(path):
-    with open(path, "rb") as f:
-        return f.read()
-
-
 def _evaluate(filename):
     full = os.path.join(PHOTOS_FOLDER, filename)
     LOGGER.info(f"Evaluating {filename}")
     try:
-        b = _read_image_bytes(full)
+        b = read_image_bytes(full)
         mtime = os.path.getmtime(full)
-        analysis = compute_score(b, mtime)
+        analysis = compute_score(b, filename)
         was_skipped = is_skipped(filename=filename)
         if was_skipped:
             analysis["score"] = analysis["score"] - 0.05

@@ -15,3 +15,8 @@ def next_scheduled_time_epoch():
     next_schedule = now.date() + timedelta(days=days_to_target)
     next_schedule = int(datetime.combine(next_schedule, target_time).timestamp())
     return next_schedule
+
+
+def read_image_bytes(path):
+    with open(path, "rb") as f:
+        return f.read()

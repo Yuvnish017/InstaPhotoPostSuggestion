@@ -1,4 +1,5 @@
 # analyzer.py
+import os
 import traceback
 from PIL import Image
 import numpy as np
@@ -11,12 +12,16 @@ import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from ai_edge_litert.interpreter import Interpreter
+from config import MODELS_PATH
+from logger import Logger
 
-interpreter = Interpreter(model_path="models/nima_mobilenet.tflite")
+interpreter = Interpreter(model_path=os.path.join(MODELS_PATH, "nima_mobilenet.tflite"))
 interpreter.allocate_tensors()
 
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
+
+LOGGER = Logger(log_file_name="analyzer.log")
 
 
 def pil_from_bytes(b):
@@ -150,7 +155,7 @@ def color_harmony_score(hues):
 
 
 def face_count(img_pil):
-    model_asset_path = 'models/blaze_face_short_range.tflite'
+    model_asset_path = os.path.join(MODELS_PATH, 'blaze_face_short_range.tflite')
     options = vision.FaceDetectorOptions(
         base_options=python.BaseOptions(model_asset_path=model_asset_path),
         running_mode=vision.RunningMode.IMAGE
@@ -165,8 +170,8 @@ def face_count(img_pil):
 
             faces = detection_result.detections
     except Exception as err:
-        print(traceback.format_exc())
-        print(err)
+        LOGGER.error(f"Face count failed: {err}")
+        LOGGER.error(f"{traceback.format_exc()}")
 
     return math.exp(-0.5 * max(0, int(len(faces))-3))
 
@@ -275,42 +280,80 @@ def composition_score(image):
     return comp_score
 
 
-def compute_score(image_bytes):
-    img = pil_from_bytes(image_bytes)
-    aesthetic = aesthetic_score(img)
-    sharp_norm = sharpness_score(img)
-    exposure = exposure_score(img)
-    dom, top_hue, avg_sat = sat_hue_info(img)
-    color_harmony = color_harmony_score(top_hue)
-    faces = face_count(img)
-    face_penalty = 0 if faces <= 3 else -0.15 * (faces - 3)
-    season = season_match_score(dom, avg_sat)
-    comp_score = composition_score(img)
+def compute_score(image_bytes, filename):
+    try:
+        img = pil_from_bytes(image_bytes)
+        dom, top_hue, avg_sat = sat_hue_info(img)
+        season = season_match_score(dom, avg_sat)
 
-    # normalize sharp roughly using tanh
-    face_norm = min(1.0, faces / 3.0)
+        from db import get_image_score_from_cache, store_score_cache
+        cache_score = get_image_score_from_cache(filename=filename)
 
-    score = (
-        0.35 * aesthetic +   # DL model
-        0.20 * sharp_norm +
-        0.15 * exposure +
-        0.05 * comp_score +
-        0.10 * color_harmony +
-        0.15 * season +
-        0.05 * face_norm
-    )
-    score += face_penalty
+        if cache_score is not None and cache_score:
+            LOGGER.info(f"{filename} found in cache with scores - {cache_score}")
+            aesthetic = cache_score.get("aesthetic", 0.0)
+            sharp_norm = cache_score.get("sharpness", 0.0)
+            exposure = cache_score.get("exposure", 0.0)
+            color_harmony = cache_score.get("color_harmony", 0.0)
+            faces = cache_score.get("face", 0.0)
+            comp_score = cache_score.get("comp_score", 0.0)
+        else:
+            LOGGER.info(f"Cache score not found for {filename}, invoking full evaluation pipeline..")
+            aesthetic = aesthetic_score(img)
+            sharp_norm = sharpness_score(img)
+            exposure = exposure_score(img)
+            color_harmony = color_harmony_score(top_hue)
+            faces = face_count(img)
+            comp_score = composition_score(img)
+            store_score_cache(
+                filename=filename,
+                aesthetic=aesthetic,
+                sharpness=sharp_norm,
+                exposure=exposure,
+                composition=comp_score,
+                color_harmony=color_harmony,
+                face=faces
+            )
 
-    return {
-        "score": float(score),
-        "aesthetic": float(aesthetic),
-        "sharpness": float(sharp_norm),
-        "exposure": float(exposure),
-        "composition": float(comp_score),
-        "color_harmony": float(color_harmony),
-        "face": float(face_norm),
-        "season_score": float(season)
-    }
+        face_norm = min(1.0, faces / 3.0)
+        face_penalty = 0 if faces <= 3 else -0.15 * (faces - 3)
+
+        score = (
+            0.35 * aesthetic +   # DL model
+            0.20 * sharp_norm +
+            0.15 * exposure +
+            0.05 * comp_score +
+            0.10 * color_harmony +
+            0.15 * season +
+            0.05 * face_norm
+        )
+        score += face_penalty
+
+        return {
+            "score": float(score),
+            "aesthetic": float(aesthetic),
+            "sharpness": float(sharp_norm),
+            "exposure": float(exposure),
+            "composition": float(comp_score),
+            "color_harmony": float(color_harmony),
+            "face": float(face_norm),
+            "face_count": int(faces),
+            "season_score": float(season)
+        }
+    except Exception as err:
+        print(err)
+        print(traceback.format_exc())
+        return {
+            "score": 0.0,
+            "aesthetic": 0.0,
+            "sharpness": 0.0,
+            "exposure": 0.0,
+            "composition": 0.0,
+            "color_harmony": 0.0,
+            "face": 0.0,
+            "face_count": 0.0,
+            "season_score": 0.0
+        }
 
 
 def gen_caption_suggestion(filename, analysis):
@@ -320,19 +363,19 @@ def gen_caption_suggestion(filename, analysis):
     else:
         parts.append("shot")
 
-    dom = analysis["dominant_color"]
-    r, g, b = dom
-    if r > 180 and g > 120:
-        parts.append("warm tones")
-    elif b > 140:
-        parts.append("cool tones")
+    # dom = analysis["dominant_color"]
+    # r, g, b = dom
+    # if r > 180 and g > 120:
+    #     parts.append("warm tones")
+    # elif b > 140:
+    #     parts.append("cool tones")
 
     hashtags = []
     if analysis["face_count"] > 0:
         hashtags += ["#portrait", "#people"]
     else:
         hashtags += ["#photooftheday"]
-    hashtags += [f"#{datetime.datetime.utcnow().year}"]
+    hashtags += [f"#{datetime.utcnow().year}"]
 
     caption = f"{filename} | " + " · ".join(parts) + "\n\n" + " ".join(hashtags)
     return caption

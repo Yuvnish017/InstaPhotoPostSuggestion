@@ -99,7 +99,7 @@ async def _process_suggestion(bot, chat_id):
         else:
             await bot.send_message(chat_id=chat_id, text="No candidates available right now.")
     except Exception as err:
-        LOGGER.error(f"Error in background suggestion: {err}")
+        LOGGER.error(f"Error in background suggestion: {err}, traceback: {traceback.format_exc()}")
         await bot.send_message(chat_id=chat_id, text="❌ An error occurred while processing suggestion.")
     finally:
         monitor.set_high_priority(False)  # Go back to sleep

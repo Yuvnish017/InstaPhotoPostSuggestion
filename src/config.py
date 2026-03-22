@@ -28,8 +28,10 @@ if IS_DOCKER:
     POSTED_FOLDER = os.getenv("POSTED_FOLDER", "/app/data/posted_images")
     DB_PATH = os.getenv("DB_PATH", "/app/data/insta_queue.db")
     LOGS_PATH = os.getenv("LOGS_PATH", "/app/src/logs")
+    MODELS_PATH = os.getenv("MODELS_PATH")
 else:
     PHOTOS_FOLDER = os.path.join(BASE_DIR, "data", os.getenv("PHOTOS_FOLDER", "photos_to_post"))
     POSTED_FOLDER = os.path.join(BASE_DIR, "data", os.getenv("POSTED_FOLDER", "posted_images"))
     DB_PATH = os.path.join(BASE_DIR, "data", os.getenv("DB_PATH", "insta_queue.db"))
     LOGS_PATH = os.path.join(BASE_DIR, "src", os.getenv("LOGS_PATH", "logs"))
+    MODELS_PATH = os.path.join(BASE_DIR, "src", os.getenv("MODELS_PATH", "models"))

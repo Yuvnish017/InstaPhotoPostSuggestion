@@ -1,12 +1,14 @@
 # db.py
 import sqlite3
-from config import DB_PATH
+from config import DB_PATH, PHOTOS_FOLDER
 import os
 import datetime
 from datetime import datetime
 from logger import Logger
+from utils import read_image_bytes
+from analyzer import compute_score
 
-LOGGER = Logger(log_file_name="db.logs")
+LOGGER = Logger(log_file_name="db.log")
 
 
 def init_db():
@@ -33,9 +35,66 @@ def init_db():
             is_busy BOOLEAN
         )
     """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS scores (
+            filename TEXT PRIMARY KEY,
+            aesthetic FLOAT,
+            sharpness FLOAT,
+            exposure FLOAT,
+            composition FLOAT,
+            color_harmony FLOAT,
+            face FLOAT
+        )
+    """)
     LOGGER.info("DB Table initialized")
     conn.commit()
     conn.close()
+
+    LOGGER.info("Initializing cache..")
+    _initialize_cache()
+
+
+def _initialize_cache():
+    for image in os.listdir(PHOTOS_FOLDER):
+        if not image.lower().endswith((".jpg", ".jpeg", ".png")):
+            continue
+        score_info = compute_score(read_image_bytes(os.path.join(PHOTOS_FOLDER, image)), image)
+        store_score_cache(
+            filename=image,
+            aesthetic=score_info.get("aesthetic", 0.0),
+            sharpness=score_info.get("sharpness", 0.0),
+            exposure=score_info.get("exposure", 0.0),
+            composition=score_info.get("composition", 0.0),
+            color_harmony=score_info.get("color_harmony", 0.0),
+            face=score_info.get("face", 0.0)
+        )
+
+
+def store_score_cache(filename, aesthetic, sharpness, exposure, composition, color_harmony, face):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT OR REPLACE INTO scores (filename, aesthetic, sharpness, exposure, composition, color_harmony, face)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (filename, aesthetic, sharpness, exposure, composition, color_harmony, face))
+    LOGGER.info(f"Scores for {filename} stored in cache")
+    conn.commit()
+    conn.close()
+
+
+def get_image_score_from_cache(filename):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    LOGGER.info(f"Executing: SELECT * FROM scores WHERE filename={filename}")
+    cur.execute("""
+        SELECT * FROM scores WHERE filename=?
+    """, (filename,))
+    row = cur.fetchone()
+    columns = [desc[0] for desc in cur.description]
+    if row:
+        row = dict(zip(columns, row))
+    conn.close()
+    return row
 
 
 def mark_suggested(filename, score, caption):
