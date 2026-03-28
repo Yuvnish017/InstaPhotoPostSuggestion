@@ -1,16 +1,21 @@
 # main.py
 import os
 import shutil
+import time
 import traceback
+import nest_asyncio
+import asyncio
 from datetime import datetime
 from telegram import Update, BotCommand
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
-from config import BOT_TOKEN, PHOTOS_FOLDER, POSTED_FOLDER, SKIP_RETRY
-from notifier import choose_and_send
-from db import mark_approved, mark_skipped, init_db, get_analysis_stats, get_latest_health_report, mark_rejected
-from utils import next_scheduled_time_epoch
+from config import BOT_TOKEN, PHOTOS_FOLDER, POSTED_FOLDER, SKIP_RETRY, CHAT_ID
+from notifier import choose
+from db import (mark_approved, mark_skipped, init_db, get_analysis_stats, get_latest_health_report, mark_rejected,
+                store_score_cache)
+from utils import next_scheduled_time_epoch, read_image_bytes
 from logger import Logger
 from resource_monitor import ResourceMonitor
+from analyzer import compute_score
 
 # ensure folders and DB exist
 os.makedirs(PHOTOS_FOLDER, exist_ok=True)
@@ -22,6 +27,25 @@ monitor.start()
 
 NEXT_SCHEDULE = next_scheduled_time_epoch()
 LOGGER = Logger(log_file_name="main.log")
+
+
+def _initialize_cache():
+    for image in os.listdir(PHOTOS_FOLDER):
+        if not image.lower().endswith((".jpg", ".jpeg", ".png")):
+            continue
+        score_info = compute_score(image_bytes=read_image_bytes(os.path.join(PHOTOS_FOLDER, image)), filename=image)
+        store_score_cache(
+            filename=image,
+            aesthetic=score_info.get("aesthetic", 0.0),
+            sharpness=score_info.get("sharpness", 0.0),
+            exposure=score_info.get("exposure", 0.0),
+            composition=score_info.get("composition", 0.0),
+            color_harmony=score_info.get("color_harmony", 0.0),
+            face=score_info.get("face_count", 0.0),
+            avg_sat=score_info.get("avg_sat", 0.0),
+            dom=score_info.get("dom", 0.0),
+            top_hue=score_info.get("top_hue", "")
+        )
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -90,12 +114,28 @@ async def last_run_utilization_command(update, context):
 
 
 async def _process_suggestion(bot, chat_id):
+    start_time = time.time()
     try:
         monitor.set_high_priority(True)  # Start high-res logging
-        sent = await choose_and_send(bot)
+        result = await asyncio.to_thread(choose)
 
-        if sent:
-            await bot.send_message(chat_id=chat_id, text=f"📸 Suggestion sent: {sent}")
+        if not result or result is None:
+            await bot.send_message(chat_id=chat_id, text="No candidates available.")
+            return
+
+        top_fname, top_score, caption, bio, keyboard = result
+
+        # send via bot
+        await bot.send_photo(
+            chat_id=chat_id,
+            photo=bio,
+            reply_markup=keyboard
+        )
+
+        LOGGER.info(f"Sent suggestion: {top_fname}, {top_score}")
+
+        if top_fname:
+            await bot.send_message(chat_id=chat_id, text=f"📸 {caption}")
         else:
             await bot.send_message(chat_id=chat_id, text="No candidates available right now.")
     except Exception as err:
@@ -103,13 +143,14 @@ async def _process_suggestion(bot, chat_id):
         await bot.send_message(chat_id=chat_id, text="❌ An error occurred while processing suggestion.")
     finally:
         monitor.set_high_priority(False)  # Go back to sleep
+        LOGGER.info(f"Time taken to process suggestion: {time.time() - start_time}")
 
 
 async def suggest_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔎 Processing suggestion...")
 
     # "Fire and forget" - this releases the chat lock immediately
-    await asyncio.create_task(_process_suggestion(context.bot, update.effective_chat.id))
+    asyncio.create_task(_process_suggestion(context.bot, update.effective_chat.id))
 
 
 async def simple_echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -121,7 +162,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     CallbackQuery data format: 'approve:filename' or 'skip:filename'
     """
-    global num_skips
     query = update.callback_query
     await query.answer()
     data = query.data or ""
@@ -195,18 +235,21 @@ async def daily_scheduler_task(app):
         wait_seconds = NEXT_SCHEDULE - curr_epoch
         LOGGER.info(f"Scheduler sleeping for {int(wait_seconds)} seconds until next run at {datetime.fromtimestamp(NEXT_SCHEDULE).strftime('%Y/%m/%d:%H:%M')}")
         await asyncio.sleep(wait_seconds)
-        try:
-            monitor.set_high_priority(True)  # Go back to sleep
-            sent = await choose_and_send(bot)
-            if sent:
-                LOGGER.info(f"Daily suggestion sent: {sent}")
-            else:
-                LOGGER.warning("No candidate to send at this time.")
-        except Exception as e:
-            LOGGER.error(f"Error in daily scheduled send: {e}")
-            LOGGER.error(traceback.format_exc())
-        finally:
-            monitor.set_high_priority(False)  # Go back to sleep
+
+        # "Fire and forget" - this releases the chat lock immediately
+        asyncio.create_task(_process_suggestion(bot, CHAT_ID))
+        # try:
+        #     monitor.set_high_priority(True)  # Go back to sleep
+        #     sent = await choose_and_send(bot)
+        #     if sent:
+        #         LOGGER.info(f"Daily suggestion sent: {sent}")
+        #     else:
+        #         LOGGER.warning("No candidate to send at this time.")
+        # except Exception as e:
+        #     LOGGER.error(f"Error in daily scheduled send: {e}")
+        #     LOGGER.error(traceback.format_exc())
+        # finally:
+        #     monitor.set_high_priority(False)  # Go back to sleep
         await asyncio.sleep(5)  # prevent double send
         NEXT_SCHEDULE = next_scheduled_time_epoch()
 
@@ -258,9 +301,7 @@ async def main():
 
 
 if __name__ == "__main__":
-    import nest_asyncio
+    LOGGER.info("initializing cache")
+    _initialize_cache()
     nest_asyncio.apply()  # patch to allow nested event loops (Jupyter/interactive)
-
-    import asyncio
-
     asyncio.run(main())

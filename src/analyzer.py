@@ -1,5 +1,6 @@
 # analyzer.py
 import os
+import time
 import traceback
 from PIL import Image
 import numpy as np
@@ -41,6 +42,7 @@ def preprocess(img):
 
 
 def aesthetic_score(input_img):
+    LOGGER.info("getting aesthetic score..")
     input_data = preprocess(input_img)
 
     interpreter.set_tensor(input_details[0]['index'], input_data)
@@ -79,6 +81,7 @@ def estimate_noise(image):
 
 
 def sharpness_score(img_pil):
+    LOGGER.info("getting sharpness score..")
     sharp = variance_of_laplacian(img_pil)
     noise = estimate_noise(img_pil)
     sharpness = sharp / (noise + 1e-6)
@@ -87,6 +90,7 @@ def sharpness_score(img_pil):
 
 
 def exposure_score(img_pil):
+    LOGGER.info("getting exposure score..")
     arr = np.array(img_pil.convert("L"))
     mean = np.mean(arr)
     std = np.std(arr)
@@ -99,6 +103,7 @@ def exposure_score(img_pil):
 
 
 def sat_hue_info(image):
+    LOGGER.info("getting sat hue info..")
     hsv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2HSV)
 
     hue = hsv[:, :, 0]
@@ -133,6 +138,7 @@ def hue_distance(h1, h2):
 
 
 def color_harmony_score(hues):
+    LOGGER.info("getting color harmony score..")
     if len(hues) < 2:
         return 0.5  # neutral
 
@@ -155,6 +161,7 @@ def color_harmony_score(hues):
 
 
 def face_count(img_pil):
+    LOGGER.info("getting face score..")
     model_asset_path = os.path.join(MODELS_PATH, 'blaze_face_short_range.tflite')
     options = vision.FaceDetectorOptions(
         base_options=python.BaseOptions(model_asset_path=model_asset_path),
@@ -269,6 +276,7 @@ def rule_of_thirds_score(saliency_map):
 
 
 def composition_score(image):
+    LOGGER.info("getting composition score..")
     edge_score = edge_density_score(image)
 
     saliency_map = get_saliency_map(image)
@@ -280,43 +288,42 @@ def composition_score(image):
     return comp_score
 
 
-def compute_score(image_bytes, filename):
+def get_or_compute(cache, key, fn):
+    return cache[key] if key in cache else fn()
+
+
+def compute_score(image_bytes, filename, cache_score=None):
+    start_time = time.time()
     try:
+        if not cache_score:
+            LOGGER.info(f"{filename} cache not found")
+            cache_score = {}
+        LOGGER.info(f"{filename} score cache : {cache_score}")
         img = pil_from_bytes(image_bytes)
-        dom, top_hue, avg_sat = sat_hue_info(img)
-        season = season_match_score(dom, avg_sat)
 
-        from db import get_image_score_from_cache, store_score_cache
-        cache_score = get_image_score_from_cache(filename=filename)
+        if all(k in cache_score for k in ["dom", "avg_sat", "top_hue"]):
+            dom = cache_score["dom"]
+            avg_sat = cache_score["avg_sat"]
+            top_hue = cache_score["top_hue"]
 
-        if cache_score is not None and cache_score:
-            LOGGER.info(f"{filename} found in cache with scores - {cache_score}")
-            aesthetic = cache_score.get("aesthetic", 0.0)
-            sharp_norm = cache_score.get("sharpness", 0.0)
-            exposure = cache_score.get("exposure", 0.0)
-            color_harmony = cache_score.get("color_harmony", 0.0)
-            faces = cache_score.get("face", 0.0)
-            comp_score = cache_score.get("comp_score", 0.0)
+            try:
+                top_hue = eval(top_hue)
+            except Exception:
+                top_hue = []
         else:
-            LOGGER.info(f"Cache score not found for {filename}, invoking full evaluation pipeline..")
-            aesthetic = aesthetic_score(img)
-            sharp_norm = sharpness_score(img)
-            exposure = exposure_score(img)
-            color_harmony = color_harmony_score(top_hue)
-            faces = face_count(img)
-            comp_score = composition_score(img)
-            store_score_cache(
-                filename=filename,
-                aesthetic=aesthetic,
-                sharpness=sharp_norm,
-                exposure=exposure,
-                composition=comp_score,
-                color_harmony=color_harmony,
-                face=faces
-            )
+            dom, top_hue, avg_sat = sat_hue_info(img)
+
+        aesthetic = get_or_compute(cache_score, "aesthetic", lambda: aesthetic_score(img))
+        sharp_norm = get_or_compute(cache_score, "sharpness", lambda: sharpness_score(img))
+        exposure = get_or_compute(cache_score, "exposure", lambda: exposure_score(img))
+        color_harmony = get_or_compute(cache_score, "color_harmony", lambda: color_harmony_score(top_hue))
+        faces = get_or_compute(cache_score, "face", lambda: face_count(img))
+        comp_score = get_or_compute(cache_score, "composition", lambda: composition_score(img))
 
         face_norm = min(1.0, faces / 3.0)
         face_penalty = 0 if faces <= 3 else -0.15 * (faces - 3)
+
+        season = season_match_score(dom, avg_sat)
 
         score = (
             0.35 * aesthetic +   # DL model
@@ -328,6 +335,7 @@ def compute_score(image_bytes, filename):
             0.05 * face_norm
         )
         score += face_penalty
+        LOGGER.info(f"time taken to analyze {filename}: {time.time() - start_time}")
 
         return {
             "score": float(score),
@@ -338,11 +346,15 @@ def compute_score(image_bytes, filename):
             "color_harmony": float(color_harmony),
             "face": float(face_norm),
             "face_count": int(faces),
+            "dom": float(dom),
+            "avg_sat": float(avg_sat),
+            "top_hue": str(top_hue),
             "season_score": float(season)
         }
     except Exception as err:
         print(err)
         print(traceback.format_exc())
+        LOGGER.info(f"time taken to analyze {filename}: {time.time() - start_time}")
         return {
             "score": 0.0,
             "aesthetic": 0.0,
@@ -352,6 +364,9 @@ def compute_score(image_bytes, filename):
             "color_harmony": 0.0,
             "face": 0.0,
             "face_count": 0.0,
+            "dom": 0.0,
+            "avg_sat": 0.0,
+            "top_hue": "",
             "season_score": 0.0
         }
 

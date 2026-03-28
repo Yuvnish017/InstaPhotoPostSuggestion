@@ -1,12 +1,10 @@
 # db.py
 import sqlite3
-from config import DB_PATH, PHOTOS_FOLDER
+from config import DB_PATH
 import os
 import datetime
 from datetime import datetime
 from logger import Logger
-from utils import read_image_bytes
-from analyzer import compute_score
 
 LOGGER = Logger(log_file_name="db.log")
 
@@ -43,58 +41,60 @@ def init_db():
             exposure FLOAT,
             composition FLOAT,
             color_harmony FLOAT,
-            face FLOAT
+            face FLOAT,
+            dom FLOAT,
+            avg_sat FLOAT,
+            top_hue TEXT
         )
     """)
     LOGGER.info("DB Table initialized")
     conn.commit()
     conn.close()
 
-    LOGGER.info("Initializing cache..")
-    _initialize_cache()
 
-
-def _initialize_cache():
-    for image in os.listdir(PHOTOS_FOLDER):
-        if not image.lower().endswith((".jpg", ".jpeg", ".png")):
-            continue
-        score_info = compute_score(read_image_bytes(os.path.join(PHOTOS_FOLDER, image)), image)
-        store_score_cache(
-            filename=image,
-            aesthetic=score_info.get("aesthetic", 0.0),
-            sharpness=score_info.get("sharpness", 0.0),
-            exposure=score_info.get("exposure", 0.0),
-            composition=score_info.get("composition", 0.0),
-            color_harmony=score_info.get("color_harmony", 0.0),
-            face=score_info.get("face", 0.0)
-        )
-
-
-def store_score_cache(filename, aesthetic, sharpness, exposure, composition, color_harmony, face):
+def store_score_cache(filename, aesthetic, sharpness, exposure, composition, color_harmony, face,
+                      dom, avg_sat, top_hue):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("""
-        INSERT OR REPLACE INTO scores (filename, aesthetic, sharpness, exposure, composition, color_harmony, face)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (filename, aesthetic, sharpness, exposure, composition, color_harmony, face))
+        INSERT OR REPLACE INTO scores (filename, aesthetic, sharpness, exposure, composition, color_harmony, face, dom, avg_sat, top_hue)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (filename, aesthetic, sharpness, exposure, composition, color_harmony, face, dom, avg_sat, top_hue))
     LOGGER.info(f"Scores for {filename} stored in cache")
     conn.commit()
     conn.close()
 
 
-def get_image_score_from_cache(filename):
+def get_image_score_from_cache(filenames):
+    if not filenames:
+        return {}
+
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    LOGGER.info(f"Executing: SELECT * FROM scores WHERE filename={filename}")
-    cur.execute("""
-        SELECT * FROM scores WHERE filename=?
-    """, (filename,))
-    row = cur.fetchone()
+
+    # Create placeholders (?, ?, ?, ...)
+    placeholders = ",".join(["?"] * len(filenames))
+
+    query = f"""
+            SELECT * FROM scores WHERE filename IN ({placeholders})
+        """
+
+    LOGGER.info(f"Executing: {query} with {len(filenames)} filenames")
+
+    cur.execute(query, filenames)
+
+    rows = cur.fetchall()
     columns = [desc[0] for desc in cur.description]
-    if row:
-        row = dict(zip(columns, row))
+
+    result = {}
+    for row in rows:
+        row_dict = dict(zip(columns, row))
+        filename = row_dict["filename"]
+        result[filename] = row_dict
+
     conn.close()
-    return row
+
+    return result
 
 
 def mark_suggested(filename, score, caption):
@@ -157,6 +157,15 @@ def is_skipped(filename):
     row = cur.fetchone()
     conn.close()
     return bool(row and row[0] == 1)
+
+
+def get_all_skipped():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT filename FROM photos WHERE skipped=1")
+    rows = cur.fetchall()
+    skipped = {r[0] for r in rows}
+    return skipped
 
 
 def is_rejected(filename):
