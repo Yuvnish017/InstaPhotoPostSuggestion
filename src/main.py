@@ -8,10 +8,10 @@ import asyncio
 from datetime import datetime
 from telegram import Update, BotCommand
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
-from config import BOT_TOKEN, PHOTOS_FOLDER, POSTED_FOLDER, SKIP_RETRY, CHAT_ID
+from config import BOT_TOKEN, PHOTOS_FOLDER, POSTED_FOLDER, SKIP_RETRY, CHAT_ID, SCHEDULE_MINUTE, SCHEDULE_HOUR
 from notifier import choose
 from db import (mark_approved, mark_skipped, init_db, get_analysis_stats, get_latest_health_report, mark_rejected,
-                store_score_cache)
+                store_score_cache, get_filenames_in_scores_db)
 from utils import next_scheduled_time_epoch, read_image_bytes
 from logger import Logger
 from resource_monitor import ResourceMonitor
@@ -25,13 +25,18 @@ init_db()
 monitor = ResourceMonitor()
 monitor.start()
 
-NEXT_SCHEDULE = next_scheduled_time_epoch()
+NEXT_SCHEDULE = next_scheduled_time_epoch(target_weekday=6, hour=SCHEDULE_HOUR, minute=SCHEDULE_MINUTE)
+NEXT_CACHE_UPDATE = next_scheduled_time_epoch(target_weekday=5, hour=SCHEDULE_HOUR, minute=SCHEDULE_MINUTE)
 LOGGER = Logger(log_file_name="main.log")
 
 
-def _initialize_cache():
+def _cache_update():
+    LOGGER.info("Cache update running...")
+    filenames_in_cache = get_filenames_in_scores_db()
+    if not filenames_in_cache:
+        filenames_in_cache = []
     for image in os.listdir(PHOTOS_FOLDER):
-        if not image.lower().endswith((".jpg", ".jpeg", ".png")):
+        if not image.lower().endswith((".jpg", ".jpeg", ".png")) or image in filenames_in_cache:
             continue
         score_info = compute_score(image_bytes=read_image_bytes(os.path.join(PHOTOS_FOLDER, image)), filename=image)
         store_score_cache(
@@ -224,7 +229,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Unknown action.")
 
 
-async def daily_scheduler_task(app):
+async def suggestion_scheduler_task(app):
     """
     Runs in background; sends one suggestion per day at configured time.
     """
@@ -238,20 +243,25 @@ async def daily_scheduler_task(app):
 
         # "Fire and forget" - this releases the chat lock immediately
         asyncio.create_task(_process_suggestion(bot, CHAT_ID))
-        # try:
-        #     monitor.set_high_priority(True)  # Go back to sleep
-        #     sent = await choose_and_send(bot)
-        #     if sent:
-        #         LOGGER.info(f"Daily suggestion sent: {sent}")
-        #     else:
-        #         LOGGER.warning("No candidate to send at this time.")
-        # except Exception as e:
-        #     LOGGER.error(f"Error in daily scheduled send: {e}")
-        #     LOGGER.error(traceback.format_exc())
-        # finally:
-        #     monitor.set_high_priority(False)  # Go back to sleep
+
         await asyncio.sleep(5)  # prevent double send
-        NEXT_SCHEDULE = next_scheduled_time_epoch()
+        NEXT_SCHEDULE = next_scheduled_time_epoch(target_weekday=6, hour=SCHEDULE_HOUR, minute=SCHEDULE_MINUTE)
+
+
+async def cache_update_scheduler():
+    global NEXT_CACHE_UPDATE
+    while True:
+        curr_epoch = int(datetime.now().timestamp())
+        wait_seconds = NEXT_CACHE_UPDATE - curr_epoch
+        LOGGER.info(
+            f"cache scheduler sleeping for {wait_seconds}..")
+        await asyncio.sleep(wait_seconds)
+
+        # "Fire and forget" - this releases the chat lock immediately
+        await cache_update_scheduler()
+
+        await asyncio.sleep(5)  # prevent double send
+        NEXT_CACHE_UPDATE = next_scheduled_time_epoch(target_weekday=5, hour=SCHEDULE_HOUR, minute=SCHEDULE_MINUTE)
 
 
 async def main():
@@ -290,7 +300,9 @@ async def main():
                                        lambda u, c: u.message.reply_text("Try /suggest_now")))
 
         # run scheduler in background
-        asyncio.create_task(daily_scheduler_task(app))
+        asyncio.create_task(suggestion_scheduler_task(app))
+
+        asyncio.create_task(cache_update_scheduler())
 
         # run bot polling (blocking)
         LOGGER.info("Starting Telegram bot...")
@@ -302,6 +314,6 @@ async def main():
 
 if __name__ == "__main__":
     LOGGER.info("initializing cache")
-    _initialize_cache()
+    _cache_update()
     nest_asyncio.apply()  # patch to allow nested event loops (Jupyter/interactive)
     asyncio.run(main())

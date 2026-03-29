@@ -65,6 +65,21 @@ def store_score_cache(filename, aesthetic, sharpness, exposure, composition, col
     conn.close()
 
 
+def get_filenames_in_scores_db():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    query = "SELECT filename FROM scores"
+    LOGGER.info(f"Executing: {query}")
+    cur.execute(query)
+
+    rows = cur.fetchall()
+    if not rows:
+        rows = []
+    filenames = [row[0] for row in rows]
+    conn.close()
+    return filenames
+
+
 def get_image_score_from_cache(filenames):
     if not filenames:
         return {}

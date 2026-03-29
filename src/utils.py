@@ -1,20 +1,29 @@
 import datetime
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, timedelta
 from datetime import time as dtime
-from config import SCHEDULE_MINUTE, SCHEDULE_HOUR
 
 
-def next_scheduled_time_epoch():
+def next_scheduled_time_epoch(target_weekday: int, hour: int, minute: int):
+    """
+    target_weekday: 0=Monday ... 6=Sunday
+    hour, minute: scheduled time
+    """
     now = datetime.now()
-    print(datetime.now(UTC).astimezone().tzinfo)
-    curr_weekday = now.date().weekday()
-    days_to_target = (6 - curr_weekday) % 7
-    target_time = dtime(SCHEDULE_HOUR, SCHEDULE_MINUTE)
+    curr_weekday = now.weekday()
+
+    # Days until target
+    days_to_target = (target_weekday - curr_weekday) % 7
+
+    target_time = dtime(hour, minute)
+
+    # If today is target day but time has passed → move to next week
     if days_to_target == 0 and now.time() >= target_time:
         days_to_target = 7
-    next_schedule = now.date() + timedelta(days=days_to_target)
-    next_schedule = int(datetime.combine(next_schedule, target_time).timestamp())
-    return next_schedule
+
+    next_date = now.date() + timedelta(days=days_to_target)
+    next_dt = datetime.combine(next_date, target_time)
+
+    return int(next_dt.timestamp())
 
 
 def read_image_bytes(path):
