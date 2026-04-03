@@ -1,12 +1,17 @@
-import datetime
+"""Shared utility helpers used across bot runtime modules."""
+
 from datetime import datetime, timedelta
 from datetime import time as dtime
+from pathlib import Path
 
 
-def next_scheduled_time_epoch(target_weekday: int, hour: int, minute: int):
-    """
-    target_weekday: 0=Monday ... 6=Sunday
-    hour, minute: scheduled time
+def next_scheduled_time_epoch(target_weekday: int, hour: int, minute: int) -> int:
+    """Return the next scheduled timestamp for a weekday/time pair.
+
+    Args:
+        target_weekday: Weekday index where Monday=0 ... Sunday=6.
+        hour: Target hour in 24-hour format.
+        minute: Target minute.
     """
     now = datetime.now()
     curr_weekday = now.weekday()
@@ -26,6 +31,7 @@ def next_scheduled_time_epoch(target_weekday: int, hour: int, minute: int):
     return int(next_dt.timestamp())
 
 
-def read_image_bytes(path):
-    with open(path, "rb") as f:
-        return f.read()
+def read_image_bytes(path: str | Path) -> bytes:
+    """Read an image file from disk as raw bytes."""
+    with open(path, "rb") as file_obj:
+        return file_obj.read()

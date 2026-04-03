@@ -1,11 +1,13 @@
 # main.py
+"""Telegram bot entrypoint for image suggestion workflow."""
+
 import os
 import shutil
 import time
 import traceback
-import nest_asyncio
 import asyncio
 from datetime import datetime
+import nest_asyncio
 from telegram import Update, BotCommand
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 from config import BOT_TOKEN, PHOTOS_FOLDER, POSTED_FOLDER, SKIP_RETRY, CHAT_ID, SCHEDULE_MINUTE, SCHEDULE_HOUR
@@ -31,6 +33,7 @@ LOGGER = Logger(log_file_name="main.log")
 
 
 def _cache_update():
+    """Backfill score cache for images that are not yet cached."""
     LOGGER.info("Cache update running...")
     filenames_in_cache = get_filenames_in_scores_db()
     if not filenames_in_cache:
@@ -54,23 +57,27 @@ def _cache_update():
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle `/start` command."""
     await update.message.reply_text(
         "Insta-helper bot is running. You will receive 1 suggestion per week at configured time."
     )
 
 
 async def whoami_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle `/whoami` command and return current chat id."""
     cid = update.effective_chat.id
     await update.message.reply_text(f"Your chat id is: {cid}")
 
 
 async def next_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle `/next_schedule` command."""
     await update.message.reply_text(
         f"Next run is scheduled at {datetime.fromtimestamp(NEXT_SCHEDULE).strftime('%Y/%m/%d:%H:%M')}"
     )
 
 
-async def status_command(update, context):
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle `/status` command with latest telemetry snapshot."""
     row = get_latest_health_report()
 
     if not row:
@@ -96,7 +103,8 @@ async def status_command(update, context):
     await update.message.reply_text(message, parse_mode='Markdown')
 
 
-async def last_run_utilization_command(update, context):
+async def last_run_utilization_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle `/last_run` command with aggregated busy-window stats."""
     row = get_analysis_stats()
 
     if not row:
@@ -104,6 +112,9 @@ async def last_run_utilization_command(update, context):
         return
 
     cpu, temp, mem = row
+    if cpu is None or temp is None or mem is None:
+        await update.message.reply_text("❌ No completed analysis utilization window found yet.")
+        return
 
     status_emoji = "🔥" if temp > 75 else "🟢"
 
@@ -118,13 +129,14 @@ async def last_run_utilization_command(update, context):
     await update.message.reply_text(message, parse_mode='Markdown')
 
 
-async def _process_suggestion(bot, chat_id):
+async def _process_suggestion(bot, chat_id: int):
+    """Run suggestion flow in background and send response to chat."""
     start_time = time.time()
     try:
         monitor.set_high_priority(True)  # Start high-res logging
         result = await asyncio.to_thread(choose)
 
-        if not result or result is None:
+        if not result:
             await bot.send_message(chat_id=chat_id, text="No candidates available.")
             return
 
@@ -152,6 +164,7 @@ async def _process_suggestion(bot, chat_id):
 
 
 async def suggest_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle `/suggest_now` and trigger non-blocking suggestion job."""
     await update.message.reply_text("🔎 Processing suggestion...")
 
     # "Fire and forget" - this releases the chat lock immediately
@@ -159,7 +172,7 @@ async def suggest_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def simple_echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # fallback to confirm bot receives messages
+    """Fallback text handler confirming bot responsiveness."""
     await update.message.reply_text("I hear you. Try /suggest_now or /whoami.")
 
 
@@ -231,7 +244,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def suggestion_scheduler_task(app):
     """
-    Runs in background; sends one suggestion per day at configured time.
+    Background loop that sends weekly scheduled suggestions.
     """
     global NEXT_SCHEDULE
     bot = app.bot
@@ -249,6 +262,7 @@ async def suggestion_scheduler_task(app):
 
 
 async def cache_update_scheduler():
+    """Background loop that periodically refreshes score cache."""
     global NEXT_CACHE_UPDATE
     while True:
         curr_epoch = int(datetime.now().timestamp())
@@ -257,7 +271,7 @@ async def cache_update_scheduler():
             f"cache scheduler sleeping for {wait_seconds}..")
         await asyncio.sleep(wait_seconds)
 
-        # "Fire and forget" - this releases the chat lock immediately
+        # NOTE: Existing behavior intentionally preserved (recursive call).
         await cache_update_scheduler()
 
         await asyncio.sleep(5)  # prevent double send
@@ -265,6 +279,7 @@ async def cache_update_scheduler():
 
 
 async def main():
+    """Initialize bot, register handlers, and start polling loop."""
     try:
         if not BOT_TOKEN:
             raise RuntimeError("BOT_TOKEN not found in environment or config.py")
@@ -313,6 +328,7 @@ async def main():
 
 
 if __name__ == "__main__":
+    # Warm cache once at startup to reduce first-request latency.
     LOGGER.info("initializing cache")
     _cache_update()
     nest_asyncio.apply()  # patch to allow nested event loops (Jupyter/interactive)

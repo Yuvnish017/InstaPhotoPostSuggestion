@@ -1,16 +1,28 @@
 # db.py
-import sqlite3
-from config import DB_PATH
+from __future__ import annotations
+
+"""SQLite data-access layer for photo status, scores and telemetry."""
+
+from collections.abc import Iterable
 import os
-import datetime
+import sqlite3
 from datetime import datetime
+
+from config import DB_PATH
 from logger import Logger
 
 LOGGER = Logger(log_file_name="db.log")
+IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
+
+
+def _connect(timeout: int = 5) -> sqlite3.Connection:
+    """Create a SQLite connection with a configurable timeout."""
+    return sqlite3.connect(DB_PATH, timeout=timeout)
 
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    """Initialize required tables if they are not present."""
+    conn = _connect()
     cur = conn.cursor()
     cur.execute("""
     CREATE TABLE IF NOT EXISTS photos (
@@ -54,7 +66,8 @@ def init_db():
 
 def store_score_cache(filename, aesthetic, sharpness, exposure, composition, color_harmony, face,
                       dom, avg_sat, top_hue):
-    conn = sqlite3.connect(DB_PATH)
+    """Insert or update a score cache record for an image."""
+    conn = _connect()
     cur = conn.cursor()
     cur.execute("""
         INSERT OR REPLACE INTO scores (filename, aesthetic, sharpness, exposure, composition, color_harmony, face, dom, avg_sat, top_hue)
@@ -66,7 +79,8 @@ def store_score_cache(filename, aesthetic, sharpness, exposure, composition, col
 
 
 def get_filenames_in_scores_db():
-    conn = sqlite3.connect(DB_PATH)
+    """Return all filenames currently present in score cache table."""
+    conn = _connect()
     cur = conn.cursor()
     query = "SELECT filename FROM scores"
     LOGGER.info(f"Executing: {query}")
@@ -80,11 +94,13 @@ def get_filenames_in_scores_db():
     return filenames
 
 
-def get_image_score_from_cache(filenames):
+def get_image_score_from_cache(filenames: Iterable[str]):
+    """Fetch cached score rows for specific filenames keyed by filename."""
+    filenames = list(filenames)
     if not filenames:
         return {}
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     cur = conn.cursor()
 
     # Create placeholders (?, ?, ?, ...)
@@ -113,7 +129,8 @@ def get_image_score_from_cache(filenames):
 
 
 def mark_suggested(filename, score, caption):
-    conn = sqlite3.connect(DB_PATH)
+    """Mark a photo as suggested while preserving prior decision flags."""
+    conn = _connect()
     cur = conn.cursor()
     cur.execute("""
     INSERT OR REPLACE INTO photos (filename, suggested_at, approved, skipped, rejected, caption, score)
@@ -128,7 +145,8 @@ def mark_suggested(filename, score, caption):
 
 
 def mark_approved(filename):
-    conn = sqlite3.connect(DB_PATH)
+    """Mark a photo as approved."""
+    conn = _connect()
     cur = conn.cursor()
     cur.execute("UPDATE photos SET approved=1 WHERE filename=?", (filename,))
     LOGGER.info(f"{filename} marked as approved and posted")
@@ -137,7 +155,8 @@ def mark_approved(filename):
 
 
 def mark_skipped(filename):
-    conn = sqlite3.connect(DB_PATH)
+    """Mark a photo as skipped."""
+    conn = _connect()
     cur = conn.cursor()
     cur.execute("UPDATE photos SET skipped=1 WHERE filename=?", (filename,))
     LOGGER.info(f"{filename} marked as skipped")
@@ -146,7 +165,8 @@ def mark_skipped(filename):
 
 
 def mark_rejected(filename):
-    conn = sqlite3.connect(DB_PATH)
+    """Mark a photo as rejected."""
+    conn = _connect()
     cur = conn.cursor()
     cur.execute("UPDATE photos SET rejected=1 WHERE filename=?", (filename,))
     LOGGER.info(f"{filename} marked as rejected")
@@ -155,7 +175,8 @@ def mark_rejected(filename):
 
 
 def is_approved(filename):
-    conn = sqlite3.connect(DB_PATH)
+    """Return True if the photo has been approved before."""
+    conn = _connect()
     cur = conn.cursor()
     LOGGER.info(f"{filename}: Checking if previously approved and posted")
     cur.execute("SELECT approved FROM photos WHERE filename=?", (filename,))
@@ -165,7 +186,8 @@ def is_approved(filename):
 
 
 def is_skipped(filename):
-    conn = sqlite3.connect(DB_PATH)
+    """Return True if the photo has been skipped before."""
+    conn = _connect()
     cur = conn.cursor()
     LOGGER.info(f"{filename}: Checking if previously skipped")
     cur.execute("SELECT skipped FROM photos WHERE filename=?", (filename,))
@@ -175,7 +197,8 @@ def is_skipped(filename):
 
 
 def get_all_skipped():
-    conn = sqlite3.connect(DB_PATH)
+    """Return a set of all skipped filenames."""
+    conn = _connect()
     cur = conn.cursor()
     cur.execute("SELECT filename FROM photos WHERE skipped=1")
     rows = cur.fetchall()
@@ -184,7 +207,8 @@ def get_all_skipped():
 
 
 def is_rejected(filename):
-    conn = sqlite3.connect(DB_PATH)
+    """Return True if the photo has been rejected before."""
+    conn = _connect()
     cur = conn.cursor()
     LOGGER.info(f"{filename}: Checking if previously skipped")
     cur.execute("SELECT rejected FROM photos WHERE filename=?", (filename,))
@@ -194,10 +218,10 @@ def is_rejected(filename):
 
 
 def unprocessed_candidates(folder, max_candidates=50):
-    # return list of filenames not approved and not skipped
+    """List image files not yet approved/rejected up to `max_candidates`."""
     files = []
     seen = set()
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     cur = conn.cursor()
     cur.execute("SELECT filename FROM photos WHERE approved=1")
     rows = cur.fetchall()
@@ -208,7 +232,7 @@ def unprocessed_candidates(folder, max_candidates=50):
     conn.close()
 
     for f in sorted(os.listdir(folder)):
-        if not f.lower().endswith((".jpg", ".jpeg", ".png")):
+        if not f.lower().endswith(IMAGE_EXTENSIONS):
             continue
         if f in approved or f in rejected:
             continue
@@ -224,12 +248,14 @@ def unprocessed_candidates(folder, max_candidates=50):
 
 def save_telemetry(stats):
     """
-    Saves a snapshot of system resources.
-    stats: dict containing 'cpu', 'mem', 'temp', and 'is_busy'
+    Persist one resource telemetry snapshot.
+
+    Args:
+        stats: Dict containing 'cpu', 'mem', 'temp', and optional 'is_busy'.
     """
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=10)  # 10s timeout for Pi SD card latency
+        conn = _connect(timeout=10)  # 10s timeout for Pi SD card latency
         cursor = conn.cursor()
 
         LOGGER.info("Executing: INSERT INTO telemetry (cpu_percent, memory_mb, temp_c, is_busy)")
@@ -252,31 +278,59 @@ def save_telemetry(stats):
 
 
 def get_latest_health_report():
-    """
-    Optional helper to let the user check Pi health via a Telegram command.
-    """
-    conn = sqlite3.connect(DB_PATH)
+    """Return the most recent telemetry row, or None if table is empty."""
+    conn = _connect()
     cursor = conn.cursor()
     LOGGER.info("Executing: SELECT * FROM telemetry ORDER BY timestamp DESC LIMIT 1")
     cursor.execute("SELECT * FROM telemetry ORDER BY timestamp DESC LIMIT 1")
     row = cursor.fetchone()
     conn.close()
-    return row  # Returns the most recent resource snapshot
+    return row
 
 
 def get_analysis_stats():
-    conn = sqlite3.connect(DB_PATH)
+    """Return aggregated telemetry stats for the latest busy analysis window.
+
+    The window is computed as:
+    - end at the latest row where `is_busy = 1`
+    - start right after the most recent `is_busy = 0` before that end row
+    """
+    conn = _connect()
     cursor = conn.cursor()
-    # Get stats only from the last time is_busy was True
-    LOGGER.info("Executing: SELECT AVG(cpu_percent), MAX(temp_c), MAX(memory_mb) FROM telemetry "
-                "WHERE timestamp > (SELECT MAX(timestamp) FROM telemetry WHERE is_busy = 0 "
-                "AND id < (SELECT MAX(id) FROM telemetry WHERE is_busy = 1)) AND is_busy = 1")
-    cursor.execute("""
-        SELECT AVG(cpu_percent), MAX(temp_c), MAX(memory_mb) 
-        FROM telemetry 
-        WHERE timestamp > (SELECT MAX(timestamp) FROM telemetry WHERE is_busy = 0 AND id < (SELECT MAX(id) FROM telemetry WHERE is_busy = 1))
-        AND is_busy = 1
-    """)
+
+    # Previous query depended on timestamp subqueries and often produced NULL window bounds.
+    # Using monotonically increasing `id` is more stable for defining the latest busy run.
+    query = """
+        WITH last_busy AS (
+            SELECT MAX(id) AS last_busy_id
+            FROM telemetry
+            WHERE is_busy = 1
+        ),
+        prev_idle AS (
+            SELECT MAX(t.id) AS prev_idle_id
+            FROM telemetry t
+            CROSS JOIN last_busy lb
+            WHERE t.is_busy = 0
+              AND t.id < lb.last_busy_id
+        )
+        SELECT
+            AVG(t.cpu_percent),
+            MAX(t.temp_c),
+            MAX(t.memory_mb)
+        FROM telemetry t
+        CROSS JOIN last_busy lb
+        CROSS JOIN prev_idle pi
+        WHERE t.is_busy = 1
+          AND t.id <= lb.last_busy_id
+          AND t.id > COALESCE(pi.prev_idle_id, 0)
+    """
+    LOGGER.info("Executing query to fetch latest busy-window utilization stats")
+    cursor.execute(query)
     stats = cursor.fetchone()
     conn.close()
+
+    # Normalize empty aggregate tuples like (None, None, None) to None.
+    if not stats or all(value is None for value in stats):
+        return None
+
     return stats

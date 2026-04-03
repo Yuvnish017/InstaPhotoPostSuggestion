@@ -1,4 +1,8 @@
 # analyzer.py
+"""Image quality analysis utilities and scoring composition."""
+
+import ast
+import json
 import os
 import time
 import traceback
@@ -26,10 +30,12 @@ LOGGER = Logger(log_file_name="analyzer.log")
 
 
 def pil_from_bytes(b):
+    """Decode raw image bytes into an RGB PIL image."""
     return Image.open(BytesIO(b)).convert("RGB")
 
 
 def preprocess(img):
+    """Prepare image tensor expected by the aesthetic TFLite model."""
     img = img.resize((224, 224))  # required input size
 
     img_array = np.array(img).astype("float32")
@@ -42,6 +48,7 @@ def preprocess(img):
 
 
 def aesthetic_score(input_img):
+    """Run the NIMA model and return normalized aesthetic score [0, 1]."""
     LOGGER.info("getting aesthetic score..")
     input_data = preprocess(input_img)
 
@@ -55,6 +62,7 @@ def aesthetic_score(input_img):
 
 
 def variance_of_laplacian(img_pil):
+    """Return Laplacian variance, a common blur/sharpness proxy."""
     arr = np.array(img_pil.convert("L"))
     lap = cv2.Laplacian(arr, cv2.CV_64F)
     return float(lap.var())
@@ -81,6 +89,7 @@ def estimate_noise(image):
 
 
 def sharpness_score(img_pil):
+    """Compute noise-adjusted sharpness score."""
     LOGGER.info("getting sharpness score..")
     sharp = variance_of_laplacian(img_pil)
     noise = estimate_noise(img_pil)
@@ -90,6 +99,7 @@ def sharpness_score(img_pil):
 
 
 def exposure_score(img_pil):
+    """Estimate exposure/contrast quality score from grayscale statistics."""
     LOGGER.info("getting exposure score..")
     arr = np.array(img_pil.convert("L"))
     mean = np.mean(arr)
@@ -103,6 +113,7 @@ def exposure_score(img_pil):
 
 
 def sat_hue_info(image):
+    """Extract dominant hue, top hue bins, and average saturation."""
     LOGGER.info("getting sat hue info..")
     hsv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2HSV)
 
@@ -133,11 +144,13 @@ def sat_hue_info(image):
 
 
 def hue_distance(h1, h2):
+    """Return circular hue distance in OpenCV hue range [0, 180)."""
     diff = abs(h1 - h2)
     return min(diff, 180 - diff)
 
 
 def color_harmony_score(hues):
+    """Heuristic color harmony score from primary hue relationships."""
     LOGGER.info("getting color harmony score..")
     if len(hues) < 2:
         return 0.5  # neutral
@@ -161,6 +174,7 @@ def color_harmony_score(hues):
 
 
 def face_count(img_pil):
+    """Return face-based score (penalizes overly crowded frames)."""
     LOGGER.info("getting face score..")
     model_asset_path = os.path.join(MODELS_PATH, 'blaze_face_short_range.tflite')
     options = vision.FaceDetectorOptions(
@@ -184,6 +198,7 @@ def face_count(img_pil):
 
 
 def get_season(month):
+    """Map month to simple meteorological season bucket."""
     if month in [12, 1, 2]:
         return "winter"
     elif month in [3, 4, 5]:
@@ -195,6 +210,7 @@ def get_season(month):
 
 
 def season_match_score(dominant_hue, avg_sat):
+    """Score whether dominant palette fits current season heuristics."""
     season = get_season(datetime.now().month)
     if dominant_hue is None:
         return 0.5
@@ -223,6 +239,7 @@ def season_match_score(dominant_hue, avg_sat):
 
 
 def edge_density_score(image):
+    """Compute visual complexity score based on Canny edge density."""
     gray = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2GRAY)
 
     edges = cv2.Canny(gray, 100, 200)
@@ -236,6 +253,7 @@ def edge_density_score(image):
 
 
 def get_saliency_map(image):
+    """Generate saliency map used by composition heuristics."""
     saliency = cv2.saliency.StaticSaliencySpectralResidual_create()
     success, saliency_map = saliency.computeSaliency(np.array(image))
 
@@ -246,6 +264,7 @@ def get_saliency_map(image):
 
 
 def rule_of_thirds_score(saliency_map):
+    """Score proximity of most salient point to thirds intersections."""
     if saliency_map is None:
         return 0.5
 
@@ -276,6 +295,7 @@ def rule_of_thirds_score(saliency_map):
 
 
 def composition_score(image):
+    """Blend edge-density and thirds-based composition signals."""
     LOGGER.info("getting composition score..")
     edge_score = edge_density_score(image)
 
@@ -289,10 +309,12 @@ def composition_score(image):
 
 
 def get_or_compute(cache, key, fn):
+    """Return cached metric or compute it lazily with `fn`."""
     return cache[key] if key in cache else fn()
 
 
 def compute_score(image_bytes, filename, cache_score=None):
+    """Compute aggregate photo score and return metric breakdown dictionary."""
     start_time = time.time()
     try:
         if not cache_score:
@@ -307,11 +329,13 @@ def compute_score(image_bytes, filename, cache_score=None):
             top_hue = cache_score["top_hue"]
 
             try:
-                top_hue = eval(top_hue)
+                top_hue = ast.literal_eval(top_hue)
             except Exception:
+                # Cache value may be malformed from older rows; fallback safely.
                 top_hue = []
         else:
             dom, top_hue, avg_sat = sat_hue_info(img)
+        LOGGER.info(f"dom: {dom}, top_hue: {top_hue}, avg_sat: {avg_sat}")
 
         aesthetic = get_or_compute(cache_score, "aesthetic", lambda: aesthetic_score(img))
         sharp_norm = get_or_compute(cache_score, "sharpness", lambda: sharpness_score(img))
@@ -352,8 +376,8 @@ def compute_score(image_bytes, filename, cache_score=None):
             "season_score": float(season)
         }
     except Exception as err:
-        print(err)
-        print(traceback.format_exc())
+        LOGGER.error(f"Analyzer failed for {filename}: {err}")
+        LOGGER.error(traceback.format_exc())
         LOGGER.info(f"time taken to analyze {filename}: {time.time() - start_time}")
         return {
             "score": 0.0,
@@ -372,6 +396,7 @@ def compute_score(image_bytes, filename, cache_score=None):
 
 
 def gen_caption_suggestion(filename, analysis):
+    """Build a short human-readable caption and hashtag suggestion."""
     parts = []
     if analysis["face_count"] > 0:
         parts.append("portrait")

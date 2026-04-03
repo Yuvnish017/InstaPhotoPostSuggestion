@@ -1,4 +1,8 @@
 # notifier.py
+from __future__ import annotations
+
+"""Candidate selection and Telegram payload preparation helpers."""
+
 import os
 import io
 import time
@@ -16,6 +20,7 @@ LOGGER = Logger(log_file_name="notifier.log")
 
 
 def _evaluate(filename, cache_score, skipped):
+    """Compute image analysis, apply skip penalty, and assemble metadata."""
     full = os.path.join(PHOTOS_FOLDER, filename)
     LOGGER.info(f"Evaluating {filename}")
     start_time = time.time()
@@ -23,7 +28,7 @@ def _evaluate(filename, cache_score, skipped):
         b = read_image_bytes(full)
         analysis = compute_score(b, cache_score=cache_score, filename=filename)
         if skipped:
-            analysis["score"] = analysis["score"] - 0.05
+            analysis["score"] -= 0.05
         caption = gen_caption_suggestion(filename, analysis)
         if cache_score is None or not cache_score:
             store_score_cache(
@@ -49,8 +54,11 @@ def _evaluate(filename, cache_score, skipped):
 
 def choose():
     """
-    Scans local folder, picks the best candidate (by analyzer score),
-    logs it as suggested and sends to CHAT_ID via provided bot.
+    Select the best image candidate and prepare Telegram response payload.
+
+    Returns:
+        None when no candidates are available, else:
+        (filename, score, caption, image_bytes_io, inline_keyboard).
     """
     # gather candidates
     candidates = unprocessed_candidates(PHOTOS_FOLDER, max_candidates=MAX_CANDIDATES)
@@ -66,7 +74,7 @@ def choose():
         analysis = _evaluate(
             filename=fname,
             cache_score=cache_scores.get(fname),
-            skipped=True if fname in skipped_filenames else False,
+            skipped=fname in skipped_filenames,
         )
         evaluated[fname] = analysis
     # with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_PROCESSES) as executor:
