@@ -202,6 +202,7 @@ async def analyze_uploaded_photo(update: Update, context: ContextTypes.DEFAULT_T
         elif message.document and message.document.mime_type and message.document.mime_type.startswith(
             "image/"
         ):
+            # send as file
             doc = message.document
             tg_file = await bot.get_file(doc.file_id)
             name = doc.file_name or ""
