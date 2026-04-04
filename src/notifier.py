@@ -110,7 +110,18 @@ def choose():
 
     # mark suggested in DB
     mark_suggested(top_fname, float(top_score), top_caption)
-    caption = f"Suggested: {top_fname}\nScore: {top_score:.3f}\n\n{top_caption}"
+    caption = (
+        f"{top_fname} Analysis:\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"Overall Score: {top_score:.3f}\n\n"
+        f"Aesthetic: {top_analysis['aesthetic']:.3f}\n"
+        f"Sharpness: {top_analysis['sharpness']:.3f}\n"
+        f"Exposure: {top_analysis['exposure']:.3f}\n"
+        f"Composition: {top_analysis['composition']:.3f}\n"
+        f"Color Harmony: {top_analysis['color_harmony']:.3f}\n"
+        f"Season: {top_analysis['season_score']:.3f}\n"
+        f"Face: {top_analysis['face']:.3f}\n"
+        )
 
     # prepare keyboard
     keyboard = InlineKeyboardMarkup([
@@ -132,4 +143,4 @@ def choose():
         bio = io.BytesIO(top_bytes)
         bio.seek(0)
 
-    return top_fname, top_score, caption, bio, keyboard
+    return top_fname, top_score, top_analysis, caption, bio, keyboard

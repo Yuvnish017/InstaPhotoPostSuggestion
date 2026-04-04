@@ -31,6 +31,14 @@ NEXT_SCHEDULE = next_scheduled_time_epoch(target_weekday=6, hour=SCHEDULE_HOUR, 
 NEXT_CACHE_UPDATE = next_scheduled_time_epoch(target_weekday=5, hour=SCHEDULE_HOUR, minute=SCHEDULE_MINUTE)
 LOGGER = Logger(log_file_name="main.log")
 
+# User uploads: gallery sends PHOTO; "Send as file" sends DOCUMENT with image/* mime type.
+_IMAGE_DOCUMENT_FILTER = (
+    filters.Document.MimeType("image/jpeg")
+    | filters.Document.MimeType("image/png")
+    | filters.Document.MimeType("image/webp")
+)
+_USER_IMAGE_FILTER = filters.PHOTO | _IMAGE_DOCUMENT_FILTER
+
 
 def _cache_update():
     """Backfill score cache for images that are not yet cached."""
@@ -140,7 +148,7 @@ async def _process_suggestion(bot, chat_id: int):
             await bot.send_message(chat_id=chat_id, text="No candidates available.")
             return
 
-        top_fname, top_score, caption, bio, keyboard = result
+        top_fname, top_score, top_analysis, caption, bio, keyboard = result
 
         # send via bot
         await bot.send_photo(
@@ -174,6 +182,66 @@ async def suggest_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def simple_echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Fallback text handler confirming bot responsiveness."""
     await update.message.reply_text("I hear you. Try /suggest_now or /whoami.")
+
+
+async def analyze_uploaded_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Analyze a user-sent image (compressed photo or image document) and reply with scores."""
+    message = update.message
+    if not message:
+        return
+
+    try:
+        await message.reply_text("🔎 Analyzing your image…")
+
+        bot = context.bot
+        # PTB v20+: largest PhotoSize; phone gallery usually sends as PHOTO (not DOCUMENT).
+        if message.photo:
+            largest = message.photo[-1]
+            tg_file = await bot.get_file(largest.file_id)
+            label = f"upload_{largest.file_unique_id}.jpg"
+        elif message.document and message.document.mime_type and message.document.mime_type.startswith(
+            "image/"
+        ):
+            doc = message.document
+            tg_file = await bot.get_file(doc.file_id)
+            name = doc.file_name or ""
+            ext = os.path.splitext(name)[1].lower()
+            if ext not in (".jpg", ".jpeg", ".png", ".webp"):
+                ext = ".jpg"
+            label = f"upload_{doc.file_unique_id}{ext}"
+        else:
+            await message.reply_text("Please send a photo or an image file.")
+            return
+
+        # Correct API name in python-telegram-bot v20+ (was wrongly download_as_byte_array).
+        raw = await tg_file.download_as_bytearray()
+        file_bytes = bytes(raw)
+
+        monitor.set_high_priority(True)
+        try:
+            analysis = await asyncio.to_thread(
+                compute_score, file_bytes, label, None
+            )
+        finally:
+            monitor.set_high_priority(False)
+
+        analysis_text = (
+            f"Analysis:\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"Overall Score: {analysis['score']:.3f}\n"
+            f"━━━━━━━━━━━━━━━\n\n"
+            f"Aesthetic: {analysis['aesthetic']:.3f}\n"
+            f"Sharpness: {analysis['sharpness']:.3f}\n"
+            f"Exposure: {analysis['exposure']:.3f}\n"
+            f"Composition: {analysis['composition']:.3f}\n"
+            f"Color Harmony: {analysis['color_harmony']:.3f}\n"
+            f"Season: {analysis['season_score']:.3f}\n"
+            f"Face: {analysis['face']:.3f}\n"
+        )
+        await message.reply_text(analysis_text)
+    except Exception as err:
+        LOGGER.error(f"analyze_uploaded_photo failed: {err}\n{traceback.format_exc()}")
+        await message.reply_text("❌ Could not analyze this image. Try another photo or send as image (not file) if it keeps failing.")
 
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -272,7 +340,7 @@ async def cache_update_scheduler():
         await asyncio.sleep(wait_seconds)
 
         # NOTE: Existing behavior intentionally preserved (recursive call).
-        await cache_update_scheduler()
+        await _cache_update()
 
         await asyncio.sleep(5)  # prevent double send
         NEXT_CACHE_UPDATE = next_scheduled_time_epoch(target_weekday=5, hour=SCHEDULE_HOUR, minute=SCHEDULE_MINUTE)
@@ -313,7 +381,7 @@ async def main():
         # fallback message handler to confirm bot connectivity
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,
                                        lambda u, c: u.message.reply_text("Try /suggest_now")))
-
+        app.add_handler(MessageHandler(_USER_IMAGE_FILTER, analyze_uploaded_photo))
         # run scheduler in background
         asyncio.create_task(suggestion_scheduler_task(app))
 
