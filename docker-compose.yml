@@ -16,5 +16,6 @@ services:
       # Map the host data folder to the container
       - ./data:/app/data
       - ./src/logs:/app/src/logs
+      - ./src/models:/app/src/models
 #      - /etc/localtime:/etc/localtime:ro  # <--- Syncs the clock with the host (Read-Only)
 #      - /etc/timezone:/etc/timezone:ro    # <--- Syncs the zone file (Read-Only)
