@@ -183,6 +183,17 @@ async def simple_echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Fallback text handler confirming bot responsiveness."""
     await update.message.reply_text("I hear you. Try /suggest_now or /whoami.")
 
+async def num_photos_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle `/num_photos` command and return number of photos in the photos folder."""
+    num_photos_to_post = len(os.listdir(PHOTOS_FOLDER))
+    num_photos_posted = len(os.listdir(POSTED_FOLDER))
+
+    message = (
+        f"Photos available to post: {num_photos_to_post}\n"
+        f"Photos posted: {num_photos_posted}\n"
+    )
+    await update.message.reply_text(message)
+
 
 async def analyze_uploaded_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Analyze a user-sent image (compressed photo or image document) and reply with scores."""
@@ -364,7 +375,8 @@ async def main():
                 BotCommand("next_schedule", "Show when is the next weekly run scheduled"),
                 BotCommand("status", "Gives latest health report based on CPU and Mem utilization"),
                 BotCommand("last_run", "Gives CPU and Mem utilization analysis for "
-                                       "last heavy image analysis run")
+                                       "last heavy image analysis run"),
+                BotCommand("num_photos", "Gives number of photos available to post and posted")
             ])
 
         except Exception:
@@ -378,6 +390,7 @@ async def main():
         app.add_handler(CommandHandler("suggest_now", suggest_now))
         app.add_handler(CommandHandler("status", status_command))
         app.add_handler(CommandHandler("last_run", last_run_utilization_command))
+        app.add_handler(CommandHandler("num_photos", num_photos_command))
         app.add_handler(CallbackQueryHandler(callback_handler))
         # fallback message handler to confirm bot connectivity
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,
