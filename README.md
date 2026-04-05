@@ -2,7 +2,7 @@
 
 **Automated Photo Curation & Suggestion Engine for Raspberry Pi**
 
-> **TL;DR:** A Python-based automation tool that syncs photos from your phone to a Raspberry Pi, scores them based on quality and context (weather, time, composition), and sends the best "Instagram-ready" suggestions to you via a Telegram Bot.
+> **TL;DR:** A Python-based automation tool that syncs photos from your phone to a Raspberry Pi, scores them based on quality and context (weather, time, composition, image quality, aesthetics), and sends the best "Instagram-ready" suggestions to you via a Telegram Bot.
 
 ---
 
@@ -15,21 +15,33 @@ The system operates as a localized automation pipeline on a Raspberry Pi.
 1. **Sync:** Photos are mirrored from your smartphone to a specific folder on the Raspberry Pi (via Syncthing/Resilio).
 2. **Ingest:** The system scans for images available for posting, scores them, and stores metadata in SQLite DB.
 3. **Score:** A logic engine analyzes images for:
-   * **Quality:** Brightness, Contrast, Color Histogram.
-   * **Color Dominace:** KMeans Clustering.
-   * **Content:** Face Detection (OpenCV).
-   * **Context:** Matches image mood to current local Weather & Time of Day.
+   * **Aesthetic:** NIMA MobileNet DL model
+   * **Quality:** Sharpness, Exposure, Color harmony.
+   * **Content:** Face Detection (Mediapipe, Blaze Face Short range model).
+   * **Context:** Matches image mood to current month and season for color and hue alignment.
 4. **Notify:** The Telegram Bot pushes the highest-scoring image to the user.
-5. **Interact:** User accepts (posts) or skips (ignores) the suggestion directly from the chat.
+5. **Interact:** User accepts (posts), skips (ignores and suggests a new one) or rejects (discard the image) the suggestion directly from the chat.
 
 ---
 
-## ✨ Key Features (Phase 1)
+## ✨ Key Features
 
 * **📱 Auto-Sync:** Seamless one-way sync from mobile to Pi.
 * **🧠 Smart Scoring:** Algorithms that prioritize photos based on lighting and "human interest" (face count).
 * **🤖 Telegram Bot:** Get your photo suggestions where you spend your time.
 * **☁️ Context Awareness:** Suggest "sunny" photos on sunny days.
+* **📊 On-demand Image Analysis:** Analyzes the uploaded image and provides image scores.
+* **⚡ Caching & fast analysis:** Per-image scores are stored in SQLite so repeat runs skip heavy work; see **Performance & observability** below.
+* **📈 Resource monitor:** Background sampling of CPU, memory, and (on Pi) temperature, persisted for `/status` and `/last_run` commands.
+
+---
+
+## ⚡ Performance & observability
+
+* **Caching:** Image analysis results are **cached in the database** (`scores` table). The first pass computes full metrics; later suggestion runs reuse cached features so analysis and picking a winner stay fast.
+* **Analysis speed:** The scoring pipeline is tuned for edge devices—expect on the order of **~3 seconds per image** end-to-end when analyzing from scratch (model + CV features; actual time varies with Pi load and image size).
+* **Suggestions at scale:** With caching populated, processing up to **50 candidate images** and sending a suggestion typically finishes in about **15–20 seconds** instead of re-running the full stack on every file each time.
+* **Resource monitor:** A **background resource monitor** thread records system utilization (CPU, app RSS memory, temperature on Raspberry Pi) into SQLite telemetry. Use the bot’s health commands to inspect recent snapshots and utilization during the last heavy analysis window.
 
 ---
 
@@ -37,7 +49,7 @@ The system operates as a localized automation pipeline on a Raspberry Pi.
 
 * **Hardware:** Raspberry Pi 4 (Recommended)
 * **Language:** Python 3.10+
-* **Computer Vision:** OpenCV (`cv2`), Pillow (`PIL`)
+* **Computer Vision:** OpenCV (`cv2`), Pillow (`PIL`), Mediapipe
 * **Database:** SQLite
 * **APIs:**
   * [python-telegram-bot](https://python-telegram-bot.org/)
@@ -173,11 +185,9 @@ docker ps
 We are actively working on moving from MVP to V2.0. Here is the current development plan:
 
 ### 🚧 In Progress
-* **[Algorithm] Composition Check:** "Rule of Thirds" detection to reward well-composed shots.
-* **[Algorithm] Crowd Control:** Penalize scores for images with too many faces (crowds).
+* **[AI] Smart Captions:** Integration with local or cloud LLMs to generate Instagram captions for approved photos.
 
 ### 📋 Planned Features
-* **[AI] Smart Captions:** Integration with local or cloud LLMs to generate Instagram captions for approved photos.
 * **[Post-Pro] Template Engine:** Auto-format approved images into 4:5 or 1:1 aspect ratios with borders.
 
 ---
