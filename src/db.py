@@ -47,7 +47,8 @@ def init_db():
     """)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS scores (
-            filename TEXT PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT UNIQUE,
             aesthetic FLOAT,
             sharpness FLOAT,
             exposure FLOAT,
@@ -92,6 +93,28 @@ def get_filenames_in_scores_db():
     filenames = [row[0] for row in rows]
     conn.close()
     return filenames
+
+
+def get_file_id_from_filename_scores_db(filename):
+    _conn = _connect()
+    cur = _conn.cursor()
+    query = "SELECT id FROM scores WHERE filename=?"
+    LOGGER.info(f"Executing: {query}")
+    cur.execute(query, (filename,))
+    row = cur.fetchone()
+    _conn.close()
+    return row[0] if row else -1
+
+
+def get_filename_from_file_id_scored_db(file_id):
+    _conn = _connect()
+    cur = _conn.cursor()
+    query = "SELECT filename FROM scores WHERE id=?"
+    LOGGER.info(f"Executing: {query}")
+    cur.execute(query, (file_id,))
+    row = cur.fetchone()
+    _conn.close()
+    return row[0] if row else "unknown"
 
 
 def get_image_score_from_cache(filenames: Iterable[str]):

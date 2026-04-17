@@ -13,7 +13,7 @@ from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandle
 from config import BOT_TOKEN, PHOTOS_FOLDER, POSTED_FOLDER, SKIP_RETRY, CHAT_ID, SCHEDULE_MINUTE, SCHEDULE_HOUR
 from notifier import choose
 from db import (mark_approved, mark_skipped, init_db, get_analysis_stats, get_latest_health_report, mark_rejected,
-                store_score_cache, get_filenames_in_scores_db)
+                store_score_cache, get_filenames_in_scores_db, get_filename_from_file_id_scored_db)
 from utils import next_scheduled_time_epoch, read_image_bytes
 from logger import Logger
 from resource_monitor import ResourceMonitor
@@ -27,8 +27,8 @@ init_db()
 monitor = ResourceMonitor()
 monitor.start()
 
-NEXT_SCHEDULE = next_scheduled_time_epoch(target_weekday=6, hour=SCHEDULE_HOUR, minute=SCHEDULE_MINUTE)
-NEXT_CACHE_UPDATE = next_scheduled_time_epoch(target_weekday=5, hour=SCHEDULE_HOUR, minute=SCHEDULE_MINUTE)
+NEXT_SCHEDULE = next_scheduled_time_epoch(target_weekday=5, hour=SCHEDULE_HOUR, minute=SCHEDULE_MINUTE)
+NEXT_CACHE_UPDATE = next_scheduled_time_epoch(target_weekday=4, hour=SCHEDULE_HOUR, minute=SCHEDULE_MINUTE)
 LOGGER = Logger(log_file_name="main.log")
 
 # User uploads: gallery sends PHOTO; "Send as file" sends DOCUMENT with image/* mime type.
@@ -148,7 +148,7 @@ async def _process_suggestion(bot, chat_id: int):
             await bot.send_message(chat_id=chat_id, text="No candidates available.")
             return
 
-        top_fname, top_score, top_analysis, caption, bio, keyboard = result
+        top_id, top_fname, top_score, top_analysis, caption, bio, keyboard = result
 
         # send via bot
         await bot.send_photo(
@@ -182,6 +182,7 @@ async def suggest_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def simple_echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Fallback text handler confirming bot responsiveness."""
     await update.message.reply_text("I hear you. Try /suggest_now or /whoami.")
+
 
 async def num_photos_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle `/num_photos` command and return number of photos in the photos folder."""
@@ -264,13 +265,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data or ""
     try:
-        action, fname = data.split(":", 1)
+        action, f_id = data.split(":", 1)
     except ValueError:
         await query.edit_message_text("Invalid action.")
         return
-
+    fname = get_filename_from_file_id_scored_db(file_id=f_id)
+    LOGGER.info(f"Filename : {fname}")
     filepath = os.path.join(PHOTOS_FOLDER, fname)
-    if action == "approve":
+    if action == "A":
         mark_approved(fname)
         # move to posted folder
         try:
@@ -292,7 +294,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             await query.edit_message_caption(f"✅ Approved, but failed to move file: {e}")
 
-    elif action == "skip":
+    elif action == "S":
         mark_skipped(fname)
         await query.edit_message_caption(f"⏭ Skipped: {fname}")
         num_skips = context.user_data.get("skip_count", 0)
@@ -315,7 +317,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # "Fire and forget" - this releases the chat lock immediately
             asyncio.create_task(_process_suggestion(context.bot, update.effective_chat.id))
-    elif action == "reject":
+    elif action == "R":
         mark_rejected(fname)
         await query.edit_message_caption(f"❌ Rejected: {fname}")
     else:
@@ -338,7 +340,7 @@ async def suggestion_scheduler_task(app):
         asyncio.create_task(_process_suggestion(bot, CHAT_ID))
 
         await asyncio.sleep(5)  # prevent double send
-        NEXT_SCHEDULE = next_scheduled_time_epoch(target_weekday=6, hour=SCHEDULE_HOUR, minute=SCHEDULE_MINUTE)
+        NEXT_SCHEDULE = next_scheduled_time_epoch(target_weekday=5, hour=SCHEDULE_HOUR, minute=SCHEDULE_MINUTE)
 
 
 async def cache_update_scheduler():
@@ -355,7 +357,7 @@ async def cache_update_scheduler():
         await _cache_update()
 
         await asyncio.sleep(5)  # prevent double send
-        NEXT_CACHE_UPDATE = next_scheduled_time_epoch(target_weekday=5, hour=SCHEDULE_HOUR, minute=SCHEDULE_MINUTE)
+        NEXT_CACHE_UPDATE = next_scheduled_time_epoch(target_weekday=4, hour=SCHEDULE_HOUR, minute=SCHEDULE_MINUTE)
 
 
 async def main():
