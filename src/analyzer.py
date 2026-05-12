@@ -19,12 +19,29 @@ from mediapipe.tasks.python import vision
 from ai_edge_litert.interpreter import Interpreter
 from config import MODELS_PATH
 from logger import Logger
+from transformers import VisionEncoderDecoderModel, ViTImageProcessor, AutoTokenizer
+import torch
+import google.generativeai as genai
+
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+genai_model = genai.GenerativeModel("gemini-1.5-flash")
 
 interpreter = Interpreter(model_path=os.path.join(MODELS_PATH, "nima_mobilenet.tflite"))
 interpreter.allocate_tensors()
 
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
+
+caption_gen_model = VisionEncoderDecoderModel.from_pretrained("nlpconnect/vit-gpt2-image-captioning")
+caption_processor = ViTImageProcessor.from_pretrained("nlpconnect/vit-gpt2-image-captioning")
+caption_tokenizer = AutoTokenizer.from_pretrained("nlpconnect/vit-gpt2-image-captioning")
+
+CAPTION_STYLES = {
+    "vibrant": "A vibrant and lively photo with rich colors and dynamic composition.",
+    "moody": "A moody and atmospheric photo with deep shadows and dramatic lighting.",
+    "cozy": "A cozy and warm photo with soft lighting and inviting tones.",
+    "neutral": "A well-balanced photo with neutral tones and good composition."
+}
 
 LOGGER = Logger(log_file_name="analyzer.log")
 
@@ -57,8 +74,9 @@ def aesthetic_score(input_img):
 
     output = interpreter.get_tensor(output_details[0]['index'])
     scores = np.arange(1, 11)  # 1 to 10
-    final_score = np.sum(output[0] * scores)
-    return final_score / 10.0  # normalize to 0–1
+    mean_score = np.sum(output[0] * scores)
+    variance = np.sum(output[0] * ((scores - mean_score) ** 2))
+    return (0.8 * (mean_score / 10) + 0.2 * min(1, variance / 8))  # normalize to 0–1
 
 
 def variance_of_laplacian(img_pil):
@@ -273,37 +291,84 @@ def rule_of_thirds_score(saliency_map):
     # Find most salient point
     y, x = np.unravel_index(np.argmax(saliency_map), saliency_map.shape)
 
-    # Normalize position
-    x_norm = x / w
-    y_norm = y / h
-
     # Thirds positions
-    thirds = [1/3, 2/3]
+    thirds = [(w / 3, h / 3), (w / 3, 2 * h / 3), (2 * w / 3, h / 3), (2 * w / 3, 2 * h / 3)]
+    min_dist = min(np.sqrt((x - tx) ** 2 + (y - ty) ** 2) for tx, ty in thirds)
+    diag = np.sqrt(w**2 + h**2)
+    return np.exp(-(min_dist / (0.15 * diag)) ** 2)
 
-    def distance_to_thirds(v):
-        return min([abs(v - t) for t in thirds])
 
-    dx = distance_to_thirds(x_norm)
-    dy = distance_to_thirds(y_norm)
+def leading_lines_score(image):
+    """Placeholder for future leading lines composition heuristic."""
+    gray = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2GRAY)
+    edges = cv2.Canny(gray, 50, 150, apertureSize=3)
+    lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=100, minLineLength=50, maxLineGap=10)
+    if lines is None:
+        return 0.3
+    angles = []
+    for line in lines[:50]:
+        x1, y1, x2, y2 = line[0]
+        angle = math.atan2(y2 - y1, x2 - x1)
+        angles.append(angle)
+    if not angles:
+        return 0.3
+    angle_std = np.std(angles)
+    score = np.exp(-angle_std)
+    return float(score)
 
-    dist = np.sqrt(dx**2 + dy**2)
 
-    # Convert to score (closer = better)
-    score = np.exp(-dist * 5)
+def aspect_ratio_score(image, lines_score):
+    h, w = image.shape[:2]
+    aspect = w / h
+    # portrait
+    if aspect < 0.9:
+        return 0.7 + 0.3 * lines_score
+    
+    # square-ish
+    elif 0.9 <= aspect <= 1.2:
+        return 0.8
+    
+    # landscape
+    else:
+        return 0.75
+    
 
-    return score
+def visual_balance_score(image, saliency_map):
+    if saliency_map is None:
+        return 0.5
+
+    h, w = saliency_map.shape
+    center_x, center_y = w / 2, h / 2
+
+    y_indices, x_indices = np.indices(saliency_map.shape)
+    distances = np.sqrt((x_indices - center_x) ** 2 + (y_indices - center_y) ** 2)
+
+    weighted_dist = np.sum(saliency_map * distances) / np.sum(saliency_map)
+    max_dist = np.sqrt(center_x**2 + center_y**2)
+
+    score = 1 - (weighted_dist / max_dist)
+    return float(score)
 
 
 def composition_score(image):
     """Blend edge-density and thirds-based composition signals."""
     LOGGER.info("getting composition score..")
-    edge_score = edge_density_score(image)
-
     saliency_map = get_saliency_map(image)
+
+    edge_score = edge_density_score(image)
     thirds_score = rule_of_thirds_score(saliency_map)
+    leading_lines_score = leading_lines_score(image)
+    aspect_score = aspect_ratio_score(image, leading_lines_score)
+    balance_score = visual_balance_score(image, saliency_map)
 
     # Weighted combination
-    comp_score = 0.6 * thirds_score + 0.4 * edge_score
+    comp_score = (
+        0.35 * thirds_score +
+        0.25 * leading_lines_score +
+        0.20 * balance_score +
+        0.10 * edge_score +
+        0.10 * aspect_score
+    )
 
     return comp_score
 
@@ -393,6 +458,75 @@ def compute_score(image_bytes, filename, cache_score=None):
             "top_hue": "",
             "season_score": 0.0
         }
+
+
+def generate_vision_caption(image_bytes):
+    image = pil_from_bytes(image_bytes)
+    image = image.resize((224, 224))  # ViT-GPT2 expects 224x224 input
+    inputs = caption_processor(images=image, return_tensors="pt").pixel_values
+
+    with torch.no_grad():
+        outputs = caption_gen_model.generate(inputs, max_length=20, num_beams=4)
+
+    caption = caption_tokenizer.decode(outputs[0], skip_special_tokens=True)
+    return caption.strip()
+
+
+def infer_mood(brightness, warmth, composition, harmony):
+    """Simple heuristic mood inference based on combined metrics."""
+    if brightness > 0.7 and warmth > 0.6 and harmony > 0.6:
+        return "vibrant"
+    elif brightness < 0.4 and composition > 0.7:
+        return "moody"
+    elif warmth > 0.7 and harmony < 0.5:
+        return "cozy"
+    else:
+        return "neutral"
+    
+
+def build_prompt(vision_caption, mood, style):
+    """Construct a prompt for caption generation based on vision model output and inferred mood."""
+    style_data = CAPTION_STYLES.get(style, CAPTION_STYLES["neutral"])
+    prompt = f"""
+    Generate 3 Instagram photography captions.
+
+    Scene: 
+    {vision_caption}
+
+    Mood: 
+    {mood}
+
+    Style:
+    {style}
+
+    Tone: 
+    {style_data}
+
+    Rules:
+    - Keep it concise (1-2 sentences).
+    - Give 3 relevant hashtags based on the scene and mood.
+    - aesthetic photography page
+    - avoid generic captions like "beautiful photo" or "lovely shot".
+    - Use engaging language that encourages interaction (likes/comments).
+    - Generate caption that tells a story or evokes emotion related to the scene and mood.
+
+    Return only captions.
+    """
+    return prompt.strip()
+
+def get_llm_response(prompt):
+    """Call Gemini 1.5 Flash with the constructed prompt to get caption suggestions."""
+    try:
+        response = genai_model.generate_content(
+            model="gemini-1.5-flash",
+            content=prompt,
+            max_output_tokens=150
+        )
+        return response.text.strip()
+    except Exception as err:
+        LOGGER.error(f"LLM generation failed: {err}")
+        LOGGER.error(traceback.format_exc())
+        return "Caption generation failed."
 
 
 def gen_caption_suggestion(filename, analysis):
