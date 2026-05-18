@@ -8,10 +8,11 @@ import io
 import time
 
 from config import PHOTOS_FOLDER, MAX_CANDIDATES
-from analyzer import compute_score, gen_caption_suggestion
+from analyzer import compute_score
 from db import (mark_suggested, unprocessed_candidates, get_image_score_from_cache, get_all_skipped,
                 store_score_cache)
 from utils import read_image_bytes
+from caption_generator import gen_caption_suggestion
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from PIL import Image
 from logger import Logger
