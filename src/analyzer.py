@@ -6,10 +6,8 @@ import json
 import os
 import time
 import traceback
-from PIL import Image
 import numpy as np
 import cv2
-from io import BytesIO
 import math
 import datetime
 from datetime import datetime
@@ -19,6 +17,7 @@ from mediapipe.tasks.python import vision
 from ai_edge_litert.interpreter import Interpreter
 from config import MODELS_PATH
 from logger import Logger
+from utils import pil_from_bytes
 
 interpreter = Interpreter(model_path=os.path.join(MODELS_PATH, "nima_mobilenet.tflite"))
 interpreter.allocate_tensors()
@@ -27,11 +26,6 @@ input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
 
 LOGGER = Logger(log_file_name="analyzer.log")
-
-
-def pil_from_bytes(b):
-    """Decode raw image bytes into an RGB PIL image."""
-    return Image.open(BytesIO(b)).convert("RGB")
 
 
 def preprocess(img):
@@ -301,7 +295,7 @@ def leading_lines_score(image):
 
 
 def aspect_ratio_score(image, lines_score):
-    h, w = image.shape[:2]
+    w, h = image.size
     aspect = w / h
     # portrait
     if aspect < 0.9:
@@ -340,14 +334,14 @@ def composition_score(image):
 
     edge_score = edge_density_score(image)
     thirds_score = rule_of_thirds_score(saliency_map)
-    leading_lines_score = leading_lines_score(image)
-    aspect_score = aspect_ratio_score(image, leading_lines_score)
+    leading_line_score = leading_lines_score(image)
+    aspect_score = aspect_ratio_score(image, leading_line_score)
     balance_score = visual_balance_score(image, saliency_map)
 
     # Weighted combination
     comp_score = (
         0.35 * thirds_score +
-        0.25 * leading_lines_score +
+        0.25 * leading_line_score +
         0.20 * balance_score +
         0.10 * edge_score +
         0.10 * aspect_score

@@ -3,6 +3,8 @@
 from datetime import datetime, timedelta
 from datetime import time as dtime
 from pathlib import Path
+from PIL import Image
+from io import BytesIO
 
 
 def next_scheduled_time_epoch(target_weekday: int, hour: int, minute: int) -> int:
@@ -35,3 +37,8 @@ def read_image_bytes(path: str | Path) -> bytes:
     """Read an image file from disk as raw bytes."""
     with open(path, "rb") as file_obj:
         return file_obj.read()
+
+
+def pil_from_bytes(b):
+    """Decode raw image bytes into an RGB PIL image."""
+    return Image.open(BytesIO(b)).convert("RGB")

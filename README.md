@@ -8,9 +8,146 @@
 
 ## 🏗 Architecture
 
-The system operates as a localized automation pipeline on a Raspberry Pi.
+The system operates as a localized automation pipeline on a Raspberry Pi (or Docker container). Photos sync from your phone into a watch folder; a long-running Telegram bot scores candidates, caches results, and pushes the best pick back to you.
 
-![Architecture Diagram](https://via.placeholder.com/800x400?text=Architecture+Diagram+Placeholder)
+### System architecture
+
+```mermaid
+flowchart TB
+    subgraph External["External"]
+        Phone["📱 Smartphone"]
+        User["👤 User (Telegram)"]
+    end
+
+    subgraph Pi["Raspberry Pi / Docker host"]
+        Sync["Syncthing / Resilio"]
+        Photos[("data/photos_to_post/")]
+        Posted[("data/posted_images/")]
+
+        subgraph App["Application layer"]
+            Main["main.py<br/>Bot · schedulers · handlers"]
+            Notifier["notifier.py<br/>Candidate selection"]
+            Analyzer["analyzer.py<br/>Scoring pipeline"]
+            DB[("SQLite<br/>insta_queue.db")]
+            RM["resource_monitor.py<br/>Background telemetry"]
+            Logs[("Rotating logs")]
+        end
+
+        subgraph Models["ML / CV models"]
+            NIMA["NIMA MobileNet (.tflite)"]
+            Blaze["BlazeFace (.tflite)"]
+            CV["OpenCV heuristics"]
+        end
+    end
+
+    Phone -->|"one-way sync"| Sync
+    Sync --> Photos
+    User <-->|"commands · photos · callbacks"| Main
+    Main --> Notifier
+    Main --> Analyzer
+    Main --> DB
+    Main --> RM
+    Notifier --> Photos
+    Notifier --> Analyzer
+    Notifier --> DB
+    Analyzer --> NIMA
+    Analyzer --> Blaze
+    Analyzer --> CV
+    Analyzer --> DB
+    RM --> DB
+    Main -->|"approve → move file"| Posted
+    Main --> Logs
+    Notifier --> Logs
+    Analyzer --> Logs
+```
+
+### End-to-end suggestion flow
+
+Triggered by **`/suggest_now`**, the **weekly scheduler** (Sunday), or **Skip** (up to `SKIP_RETRY` times).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as User
+    participant M as main.py
+    participant RM as ResourceMonitor
+    participant N as notifier.choose()
+    participant DB as SQLite
+    participant A as analyzer.compute_score()
+
+    U->>M: /suggest_now · schedule · skip
+    M->>RM: set_high_priority(true)
+    M->>N: run in worker thread
+
+    N->>DB: unprocessed_candidates()
+    N->>DB: get_image_score_from_cache()
+    N->>DB: get_all_skipped()
+
+    loop Up to MAX_CANDIDATES images
+        N->>A: score image (reuse cache if present)
+        alt Cache miss
+            A->>DB: store_score_cache()
+        end
+    end
+
+    N->>N: pick highest score
+    N->>DB: mark_suggested(winner)
+    N-->>M: photo · caption · inline keyboard
+    M->>U: send_photo + analysis text
+    M->>RM: set_high_priority(false)
+
+    alt ✅ Approve
+        U->>M: callback approve:filename
+        M->>DB: mark_approved()
+        M->>M: move file → posted_images/
+    else ⏭ Skip
+        U->>M: callback skip:filename
+        M->>DB: mark_skipped()
+        M->>N: suggest next (if under limit)
+    else ❌ Reject
+        U->>M: callback reject:filename
+        M->>DB: mark_rejected()
+    end
+```
+
+### Cache pre-warm flow
+
+Scores are cached in the **`scores`** table so repeat runs stay fast (~15–20 s for 50 images when warm).
+
+```mermaid
+flowchart LR
+    subgraph Triggers["Triggers"]
+        Startup["App startup"]
+        Sat["Saturday scheduler"]
+    end
+
+    subgraph CacheJob["_cache_update()"]
+        Scan["List photos_to_post/"]
+        Diff["Skip files already in scores"]
+        Score["analyzer.compute_score()"]
+        Store["db.store_score_cache()"]
+    end
+
+    Startup --> Scan
+    Sat --> Scan
+    Scan --> Diff --> Score --> Store
+    Store --> DB[("scores table")]
+```
+
+### On-demand upload analysis
+
+Send a photo directly in chat (gallery **Photo** or **image document**) for instant scoring without adding it to the sync folder.
+
+```mermaid
+flowchart LR
+    U["User uploads image"] --> H["analyze_uploaded_photo"]
+    H --> DL["Download via Telegram API"]
+    DL --> A["compute_score()"]
+    A --> R["Reply with metric breakdown"]
+    H --> RM["ResourceMonitor<br/>high-priority sampling"]
+```
+
+### Pipeline summary
 
 1. **Sync:** Photos are mirrored from your smartphone to a specific folder on the Raspberry Pi (via Syncthing/Resilio).
 2. **Ingest:** The system scans for images available for posting, scores them, and stores metadata in SQLite DB.
