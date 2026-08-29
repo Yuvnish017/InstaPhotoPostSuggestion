@@ -18,6 +18,7 @@ from utils import next_scheduled_time_epoch, read_image_bytes
 from logger import Logger
 from resource_monitor import ResourceMonitor
 from analyzer import compute_score
+from caption_generator import generate_llm_caption
 
 # ensure folders and DB exist
 os.makedirs(PHOTOS_FOLDER, exist_ok=True)
@@ -27,8 +28,8 @@ init_db()
 monitor = ResourceMonitor()
 monitor.start()
 
-NEXT_SCHEDULE = next_scheduled_time_epoch(target_weekday=6, hour=SCHEDULE_HOUR, minute=SCHEDULE_MINUTE)
-NEXT_CACHE_UPDATE = next_scheduled_time_epoch(target_weekday=5, hour=SCHEDULE_HOUR, minute=SCHEDULE_MINUTE)
+NEXT_SCHEDULE = next_scheduled_time_epoch(target_weekday=5, hour=SCHEDULE_HOUR, minute=SCHEDULE_MINUTE)
+NEXT_CACHE_UPDATE = next_scheduled_time_epoch(target_weekday=4, hour=SCHEDULE_HOUR, minute=SCHEDULE_MINUTE)
 LOGGER = Logger(log_file_name="main.log")
 
 # User uploads: gallery sends PHOTO; "Send as file" sends DOCUMENT with image/* mime type.
@@ -183,6 +184,7 @@ async def simple_echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Fallback text handler confirming bot responsiveness."""
     await update.message.reply_text("I hear you. Try /suggest_now or /whoami.")
 
+
 async def num_photos_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle `/num_photos` command and return number of photos in the photos folder."""
     num_photos_to_post = len(os.listdir(PHOTOS_FOLDER))
@@ -272,6 +274,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     filepath = os.path.join(PHOTOS_FOLDER, fname)
     if action == "approve":
         mark_approved(fname)
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"Generating instagram captions..."
+        )
+
+        llm_caption = generate_llm_caption(filepath)
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=llm_caption
+        )
         # move to posted folder
         try:
             dest = os.path.join(POSTED_FOLDER, fname)
@@ -287,6 +299,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             shutil.move(filepath, dest)
 
             await query.edit_message_caption(f"✅ Approved & moved to posted: {os.path.basename(dest)}")
+
         except FileNotFoundError:
             await query.edit_message_caption(f"✅ Approved (file not found locally). Marked as posted.")
         except Exception as e:

@@ -29,6 +29,10 @@ MAX_PROCESSES = int(os.getenv("MAX_PROCESSES", "10"))
 PROCESS_TIMEOUT = int(os.getenv("PROCESS_TIMEOUT", "300"))
 SKIP_RETRY = int(os.getenv("SKIP_RETRY", "3"))
 
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL")
+print(GEMINI_MODEL)
+
 if IS_DOCKER:
     # Container paths are mounted by docker-compose/runtime.
     PHOTOS_FOLDER = os.getenv("PHOTOS_FOLDER", "/app/data/photos_to_post")
