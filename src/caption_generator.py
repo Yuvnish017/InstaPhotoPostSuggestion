@@ -9,11 +9,13 @@ import datetime
 from datetime import datetime
 import traceback
 from utils import pil_from_bytes, read_image_bytes
+from config import GOOGLE_API_KEY, GEMINI_MODEL
+print(GEMINI_MODEL)
 
 LOGGER = Logger(log_file_name="caption_generator.log")
 
-genai.configure(api_key="AIzaSyBs1KtUb8kHPnkV4PrnuTAlPNV22_3w8zs")
-genai_model = genai.GenerativeModel("gemini-3.7-flash")
+genai.configure(api_key=GOOGLE_API_KEY)
+genai_model = genai.GenerativeModel(GEMINI_MODEL)
 
 caption_gen_model = VisionEncoderDecoderModel.from_pretrained("nlpconnect/vit-gpt2-image-captioning")
 caption_processor = ViTImageProcessor.from_pretrained("nlpconnect/vit-gpt2-image-captioning")
