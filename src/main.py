@@ -274,19 +274,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     filepath = os.path.join(PHOTOS_FOLDER, fname)
     if action == "approve":
         mark_approved(fname)
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=f"Generating instagram captions..."
-        )
 
-        llm_caption = generate_llm_caption(filepath)
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=llm_caption
-        )
         # move to posted folder
+        dest = os.path.join(POSTED_FOLDER, fname)
         try:
-            dest = os.path.join(POSTED_FOLDER, fname)
             if os.path.exists(dest):
                 base, ext = os.path.splitext(fname)
                 i = 1
@@ -304,6 +295,23 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_caption(f"✅ Approved (file not found locally). Marked as posted.")
         except Exception as e:
             await query.edit_message_caption(f"✅ Approved, but failed to move file: {e}")
+
+        try:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"Generating instagram captions..."
+            )
+
+            llm_caption = generate_llm_caption(dest)
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=llm_caption
+            )
+        except Exception as err:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"Unable to generate caption, ERR: {err}"
+            )
 
     elif action == "skip":
         mark_skipped(fname)

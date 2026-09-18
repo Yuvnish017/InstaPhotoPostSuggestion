@@ -30,7 +30,7 @@ PROCESS_TIMEOUT = int(os.getenv("PROCESS_TIMEOUT", "300"))
 SKIP_RETRY = int(os.getenv("SKIP_RETRY", "3"))
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.7-flash")
 print(GEMINI_MODEL)
 
 if IS_DOCKER:
