@@ -359,7 +359,7 @@ async def suggestion_scheduler_task(app):
         asyncio.create_task(_process_suggestion(bot, CHAT_ID))
 
         await asyncio.sleep(5)  # prevent double send
-        NEXT_SCHEDULE = next_scheduled_time_epoch(target_weekday=6, hour=SCHEDULE_HOUR, minute=SCHEDULE_MINUTE)
+        NEXT_SCHEDULE = next_scheduled_time_epoch(target_weekday=5, hour=SCHEDULE_HOUR, minute=SCHEDULE_MINUTE)
 
 
 async def cache_update_scheduler():
@@ -376,7 +376,7 @@ async def cache_update_scheduler():
         await _cache_update()
 
         await asyncio.sleep(5)  # prevent double send
-        NEXT_CACHE_UPDATE = next_scheduled_time_epoch(target_weekday=5, hour=SCHEDULE_HOUR, minute=SCHEDULE_MINUTE)
+        NEXT_CACHE_UPDATE = next_scheduled_time_epoch(target_weekday=4, hour=SCHEDULE_HOUR, minute=SCHEDULE_MINUTE)
 
 
 async def main():
